@@ -137,7 +137,6 @@ func NewTestAuthServer(cfg TestAuthServerConfig) (*TestAuthServer, error) {
 	}
 
 	srv.AuthServer, err = NewAuthServer(&InitConfig{
-		ClusterName:            clusterName,
 		Backend:                srv.Backend,
 		Authority:              authority.New(),
 		Access:                 access,
@@ -179,7 +178,7 @@ func NewTestAuthServer(cfg TestAuthServerConfig) (*TestAuthServer, error) {
 
 	// set static tokens
 	staticTokens, err := services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{},
+		StaticTokens: []services.ProvisionTokenV1{},
 	})
 	if err != nil {
 		return nil, trace.Wrap(err)

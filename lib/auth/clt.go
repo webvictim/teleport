@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Gravitational, Inc.
+Copyright 2015-2019 Gravitational, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ import (
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth/proto"
+	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/events"
 	"github.com/gravitational/teleport/lib/httplib"
@@ -47,6 +48,7 @@ import (
 	"github.com/gravitational/roundtrip"
 	"github.com/gravitational/trace"
 	"github.com/gravitational/trace/trail"
+	"github.com/jonboulle/clockwork"
 	"github.com/tstranex/u2f"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -497,7 +499,7 @@ func (c *Client) GetCertAuthorities(caType services.CertAuthType, loadKeys bool,
 	}
 	re := make([]services.CertAuthority, len(items))
 	for i, raw := range items {
-		ca, err := services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(raw)
+		ca, err := services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -518,7 +520,8 @@ func (c *Client) GetCertAuthority(id services.CertAuthID, loadSigningKeys bool, 
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(out.Bytes())
+	return services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(
+		out.Bytes(), services.SkipValidation())
 }
 
 // DeleteCertAuthority deletes cert authority by ID
@@ -597,29 +600,39 @@ func (c *Client) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedKeys,
 	return &keys, nil
 }
 
+// UpsertToken adds provisioning tokens for the auth server
+func (c *Client) UpsertToken(tok services.ProvisionToken) error {
+	_, err := c.PostJSON(c.Endpoint("tokens"), GenerateTokenRequest{
+		Token: tok.GetName(),
+		Roles: tok.GetRoles(),
+		TTL:   backend.TTL(clockwork.NewRealClock(), tok.Expiry()),
+	})
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
 // GetTokens returns a list of active invitation tokens for nodes and users
-func (c *Client) GetTokens() (tokens []services.ProvisionToken, err error) {
+func (c *Client) GetTokens(opts ...services.MarshalOption) ([]services.ProvisionToken, error) {
 	out, err := c.Get(c.Endpoint("tokens"), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
+	var tokens []services.ProvisionTokenV1
 	if err := json.Unmarshal(out.Bytes(), &tokens); err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return tokens, nil
+	return services.ProvisionTokensFromV1(tokens), nil
 }
 
 // GetToken returns provisioning token
-func (c *Client) GetToken(token string) (*services.ProvisionToken, error) {
+func (c *Client) GetToken(token string) (services.ProvisionToken, error) {
 	out, err := c.Get(c.Endpoint("tokens", token), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	var tok services.ProvisionToken
-	if err := json.Unmarshal(out.Bytes(), &tok); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return &tok, nil
+	return services.UnmarshalProvisionToken(out.Bytes(), services.SkipValidation())
 }
 
 // DeleteToken deletes a given provisioning token on the auth server (CA). It
@@ -750,7 +763,14 @@ func (c *Client) NewWatcher(ctx context.Context, watch services.Watch) (services
 		return nil, trace.Wrap(err)
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
-	stream, err := clt.WatchEvents(cancelCtx, &proto.Watch{Kinds: watch.Kinds})
+	var protoWatch proto.Watch
+	for _, kind := range watch.Kinds {
+		protoWatch.Kinds = append(protoWatch.Kinds, proto.WatchKind{
+			Kind:        kind.Kind,
+			LoadSecrets: kind.LoadSecrets,
+		})
+	}
+	stream, err := clt.WatchEvents(cancelCtx, &protoWatch)
 	if err != nil {
 		cancel()
 		return nil, trail.FromGRPC(err)
@@ -839,6 +859,30 @@ func (c *Client) UpsertNodes(namespace string, servers []services.Server) error 
 	return trace.Wrap(err)
 }
 
+// DeleteAllNodes deletes all nodes in a given namespace
+func (c *Client) DeleteAllNodes(namespace string) error {
+	_, err := c.Delete(c.Endpoint("namespaces", namespace, "nodes"))
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+// DeleteNode deletes node in the namespace by name
+func (c *Client) DeleteNode(namespace string, name string) error {
+	if namespace == "" {
+		return trace.BadParameter("missing parameter namespace")
+	}
+	if name == "" {
+		return trace.BadParameter("missing parameter name")
+	}
+	_, err := c.Delete(c.Endpoint("namespaces", namespace, "nodes", name))
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
 // GetNodes returns the list of servers registered in the cluster.
 func (c *Client) GetNodes(namespace string, opts ...services.MarshalOption) ([]services.Server, error) {
 	if namespace == "" {
@@ -865,7 +909,7 @@ func (c *Client) GetNodes(namespace string, opts ...services.MarshalOption) ([]s
 		s, err := services.GetServerMarshaler().UnmarshalServer(
 			raw,
 			services.KindNode,
-			opts...)
+			services.AddOptions(opts, services.SkipValidation())...)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -906,7 +950,7 @@ func (c *Client) GetReverseTunnels() ([]services.ReverseTunnel, error) {
 	}
 	tunnels := make([]services.ReverseTunnel, len(items))
 	for i, raw := range items {
-		tunnel, err := services.GetReverseTunnelMarshaler().UnmarshalReverseTunnel(raw)
+		tunnel, err := services.GetReverseTunnelMarshaler().UnmarshalReverseTunnel(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -955,7 +999,7 @@ func (c *Client) GetTunnelConnections(clusterName string, opts ...services.Marsh
 	}
 	conns := make([]services.TunnelConnection, len(items))
 	for i, raw := range items {
-		conn, err := services.UnmarshalTunnelConnection(raw)
+		conn, err := services.UnmarshalTunnelConnection(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -976,7 +1020,7 @@ func (c *Client) GetAllTunnelConnections(opts ...services.MarshalOption) ([]serv
 	}
 	conns := make([]services.TunnelConnection, len(items))
 	for i, raw := range items {
-		conn, err := services.UnmarshalTunnelConnection(raw)
+		conn, err := services.UnmarshalTunnelConnection(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -1004,6 +1048,11 @@ func (c *Client) DeleteTunnelConnections(clusterName string) error {
 	}
 	_, err := c.Delete(c.Endpoint("tunnelconnections", clusterName))
 	return trace.Wrap(err)
+}
+
+// DeleteAllTokens deletes all tokens
+func (c *Client) DeleteAllTokens() error {
+	return trace.NotImplemented("not implemented")
 }
 
 // DeleteAllTunnelConnections deletes all tunnel connections
@@ -1034,7 +1083,7 @@ func (c *Client) GetRemoteClusters(opts ...services.MarshalOption) ([]services.R
 	}
 	conns := make([]services.RemoteCluster, len(items))
 	for i, raw := range items {
-		conn, err := services.UnmarshalRemoteCluster(raw)
+		conn, err := services.UnmarshalRemoteCluster(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -1052,7 +1101,7 @@ func (c *Client) GetRemoteCluster(clusterName string) (services.RemoteCluster, e
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return services.UnmarshalRemoteCluster(out.Bytes())
+	return services.UnmarshalRemoteCluster(out.Bytes(), services.SkipValidation())
 }
 
 // DeleteRemoteCluster deletes remote cluster by name
@@ -1109,7 +1158,7 @@ func (c *Client) GetAuthServers() ([]services.Server, error) {
 	}
 	re := make([]services.Server, len(items))
 	for i, raw := range items {
-		server, err := services.GetServerMarshaler().UnmarshalServer(raw, services.KindAuthServer)
+		server, err := services.GetServerMarshaler().UnmarshalServer(raw, services.KindAuthServer, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -1144,13 +1193,34 @@ func (c *Client) GetProxies() ([]services.Server, error) {
 	}
 	re := make([]services.Server, len(items))
 	for i, raw := range items {
-		server, err := services.GetServerMarshaler().UnmarshalServer(raw, services.KindProxy)
+		server, err := services.GetServerMarshaler().UnmarshalServer(raw, services.KindProxy, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
 		re[i] = server
 	}
 	return re, nil
+}
+
+// DeleteAllProxies deletes all proxies
+func (c *Client) DeleteAllProxies() error {
+	_, err := c.Delete(c.Endpoint("proxies"))
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+// DeleteProxy deletes proxy by name
+func (c *Client) DeleteProxy(name string) error {
+	if name == "" {
+		return trace.BadParameter("missing parameter name")
+	}
+	_, err := c.Delete(c.Endpoint("proxies", name))
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
 }
 
 // GetU2FAppID returns U2F settings, like App ID and Facets
@@ -1308,7 +1378,7 @@ func (c *Client) GetUser(name string) (services.User, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	user, err := services.GetUserMarshaler().UnmarshalUser(out.Bytes())
+	user, err := services.GetUserMarshaler().UnmarshalUser(out.Bytes(), services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -1327,7 +1397,7 @@ func (c *Client) GetUsers() ([]services.User, error) {
 	}
 	users := make([]services.User, len(items))
 	for i, userBytes := range items {
-		user, err := services.GetUserMarshaler().UnmarshalUser(userBytes)
+		user, err := services.GetUserMarshaler().UnmarshalUser(userBytes, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -1520,7 +1590,7 @@ func (c *Client) GetOIDCConnector(id string, withSecrets bool) (services.OIDCCon
 	if err != nil {
 		return nil, err
 	}
-	return services.GetOIDCConnectorMarshaler().UnmarshalOIDCConnector(out.Bytes())
+	return services.GetOIDCConnectorMarshaler().UnmarshalOIDCConnector(out.Bytes(), services.SkipValidation())
 }
 
 // GetOIDCConnector gets OIDC connectors list
@@ -1536,7 +1606,7 @@ func (c *Client) GetOIDCConnectors(withSecrets bool) ([]services.OIDCConnector, 
 	}
 	connectors := make([]services.OIDCConnector, len(items))
 	for i, raw := range items {
-		connector, err := services.GetOIDCConnectorMarshaler().UnmarshalOIDCConnector(raw)
+		connector, err := services.GetOIDCConnectorMarshaler().UnmarshalOIDCConnector(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -1646,7 +1716,7 @@ func (c *Client) GetSAMLConnector(id string, withSecrets bool) (services.SAMLCon
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return services.GetSAMLConnectorMarshaler().UnmarshalSAMLConnector(out.Bytes())
+	return services.GetSAMLConnectorMarshaler().UnmarshalSAMLConnector(out.Bytes(), services.SkipValidation())
 }
 
 // GetSAMLConnectors gets SAML connectors list
@@ -1662,7 +1732,7 @@ func (c *Client) GetSAMLConnectors(withSecrets bool) ([]services.SAMLConnector, 
 	}
 	connectors := make([]services.SAMLConnector, len(items))
 	for i, raw := range items {
-		connector, err := services.GetSAMLConnectorMarshaler().UnmarshalSAMLConnector(raw)
+		connector, err := services.GetSAMLConnectorMarshaler().UnmarshalSAMLConnector(raw, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -2009,7 +2079,7 @@ func (c *Client) GetNamespaces() ([]services.Namespace, error) {
 		return nil, trace.Wrap(err)
 	}
 	var re []services.Namespace
-	if err := json.Unmarshal(out.Bytes(), &re); err != nil {
+	if err := utils.FastUnmarshal(out.Bytes(), &re); err != nil {
 		return nil, trace.Wrap(err)
 	}
 	return re, nil
@@ -2024,11 +2094,7 @@ func (c *Client) GetNamespace(name string) (*services.Namespace, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	var ns services.Namespace
-	if err := json.Unmarshal(out.Bytes(), &ns); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return &ns, nil
+	return services.UnmarshalNamespace(out.Bytes(), services.SkipValidation())
 }
 
 // UpsertNamespace upserts namespace
@@ -2055,7 +2121,7 @@ func (c *Client) GetRoles() ([]services.Role, error) {
 	}
 	roles := make([]services.Role, len(items))
 	for i, roleBytes := range items {
-		role, err := services.GetRoleMarshaler().UnmarshalRole(roleBytes)
+		role, err := services.GetRoleMarshaler().UnmarshalRole(roleBytes, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -2088,7 +2154,7 @@ func (c *Client) GetRole(name string) (services.Role, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	role, err := services.GetRoleMarshaler().UnmarshalRole(out.Bytes())
+	role, err := services.GetRoleMarshaler().UnmarshalRole(out.Bytes(), services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -2102,13 +2168,13 @@ func (c *Client) DeleteRole(name string) error {
 }
 
 // GetClusterConfig returns cluster level configuration information.
-func (c *Client) GetClusterConfig() (services.ClusterConfig, error) {
+func (c *Client) GetClusterConfig(opts ...services.MarshalOption) (services.ClusterConfig, error) {
 	out, err := c.Get(c.Endpoint("configuration"), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
-	cc, err := services.GetClusterConfigMarshaler().Unmarshal(out.Bytes())
+	cc, err := services.GetClusterConfigMarshaler().Unmarshal(out.Bytes(), services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -2131,13 +2197,13 @@ func (c *Client) SetClusterConfig(cc services.ClusterConfig) error {
 	return nil
 }
 
-func (c *Client) GetClusterName() (services.ClusterName, error) {
+func (c *Client) GetClusterName(opts ...services.MarshalOption) (services.ClusterName, error) {
 	out, err := c.Get(c.Endpoint("configuration", "name"), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
-	cn, err := services.GetClusterNameMarshaler().Unmarshal(out.Bytes())
+	cn, err := services.GetClusterNameMarshaler().Unmarshal(out.Bytes(), services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -2159,13 +2225,23 @@ func (c *Client) SetClusterName(cn services.ClusterName) error {
 	return nil
 }
 
+func (c *Client) UpsertClusterName(cn services.ClusterName) error {
+	return trace.NotImplemented("not implemented")
+}
+
+// DeleteStaticTokens deletes static tokens
+func (c *Client) DeleteStaticTokens() error {
+	_, err := c.Delete(c.Endpoint("configuration", "static_tokens"))
+	return trace.Wrap(err)
+}
+
 func (c *Client) GetStaticTokens() (services.StaticTokens, error) {
 	out, err := c.Get(c.Endpoint("configuration", "static_tokens"), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
-	st, err := services.GetStaticTokensMarshaler().Unmarshal(out.Bytes())
+	st, err := services.GetStaticTokensMarshaler().Unmarshal(out.Bytes(), services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -2220,6 +2296,16 @@ func (c *Client) GetLocalClusterName() (string, error) {
 	return c.GetDomainName()
 }
 
+// DeleteClusterConfig deletes cluster config
+func (c *Client) DeleteClusterConfig() error {
+	return trace.NotImplemented("not implemented")
+}
+
+// DeleteClusterName deletes cluster name
+func (c *Client) DeleteClusterName() error {
+	return trace.NotImplemented("not implemented")
+}
+
 // UpsertLocalClusterName upserts local cluster name
 func (c *Client) UpsertLocalClusterName(string) error {
 	return trace.NotImplemented("not implemented")
@@ -2240,16 +2326,6 @@ func (c *Client) DeleteAllNamespaces() error {
 	return trace.NotImplemented("not implemented")
 }
 
-// DeleteAllProxies deletes all proxies
-func (c *Client) DeleteAllProxies() error {
-	return trace.NotImplemented("not implemented")
-}
-
-// DeleteAllNodes deletes all nodes in a given namespace
-func (c *Client) DeleteAllNodes(namespace string) error {
-	return trace.NotImplemented("not implemented")
-}
-
 // DeleteAllRoles deletes all roles
 func (c *Client) DeleteAllRoles() error {
 	return trace.NotImplemented("not implemented")
@@ -2266,7 +2342,7 @@ func (c *Client) GetTrustedCluster(name string) (services.TrustedCluster, error)
 		return nil, trace.Wrap(err)
 	}
 
-	trustedCluster, err := services.GetTrustedClusterMarshaler().Unmarshal(out.Bytes())
+	trustedCluster, err := services.GetTrustedClusterMarshaler().Unmarshal(out.Bytes(), services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -2286,7 +2362,7 @@ func (c *Client) GetTrustedClusters() ([]services.TrustedCluster, error) {
 	}
 	trustedClusters := make([]services.TrustedCluster, len(items))
 	for i, bytes := range items {
-		trustedCluster, err := services.GetTrustedClusterMarshaler().Unmarshal(bytes)
+		trustedCluster, err := services.GetTrustedClusterMarshaler().Unmarshal(bytes, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -2480,20 +2556,29 @@ type IdentityService interface {
 	// CreateSignupToken creates one time token for creating account for the user
 	// For each token it creates username and OTP key
 	CreateSignupToken(user services.UserV1, ttl time.Duration) (string, error)
+
+	// DeleteAllUsers deletes all users
+	DeleteAllUsers() error
 }
 
 // ProvisioningService is a service in control
 // of adding new nodes, auth servers and proxies to the cluster
 type ProvisioningService interface {
 	// GetTokens returns a list of active invitation tokens for nodes and users
-	GetTokens() (tokens []services.ProvisionToken, err error)
+	GetTokens(opts ...services.MarshalOption) (tokens []services.ProvisionToken, err error)
 
 	// GetToken returns provisioning token
-	GetToken(token string) (*services.ProvisionToken, error)
+	GetToken(token string) (services.ProvisionToken, error)
 
 	// DeleteToken deletes a given provisioning token on the auth server (CA). It
 	// could be a user token or a machine token
 	DeleteToken(token string) error
+
+	// DeleteAllTokens deletes all provisioning tokens
+	DeleteAllTokens() error
+
+	// UpsertToken adds provisioning tokens for the auth server
+	UpsertToken(services.ProvisionToken) error
 
 	// RegisterUsingToken calls the auth service API to register a new node via registration token
 	// which has been previously issued via GenerateToken

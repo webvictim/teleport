@@ -215,6 +215,7 @@ func (l *LiteBackend) createSchema() error {
            created INTEGER NOT NULL,
            kv_key TEXT NOT NULL,
            kv_modified INTEGER NOT NULL,
+           kv_expires DATETIME,
            kv_value BLOB
          );
         CREATE INDEX IF NOT EXISTS events_created ON events (created);`,
@@ -262,11 +263,11 @@ func (l *LiteBackend) Create(ctx context.Context, i backend.Item) (*backend.Leas
 	err := l.inTransaction(ctx, func(tx *sql.Tx) error {
 		created := l.clock.Now().UTC()
 		if !l.EventsOff {
-			stmt, err := tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_value) values(?, ?, ?, ?, ?)")
+			stmt, err := tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_expires, kv_value) values(?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return trace.Wrap(err)
 			}
-			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(i.Key), id(created), i.Value); err != nil {
+			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(i.Key), id(created), expires(i.Expires), i.Value); err != nil {
 				return trace.Wrap(err)
 			}
 		}
@@ -327,11 +328,11 @@ func (l *LiteBackend) CompareAndSwap(ctx context.Context, expected backend.Item,
 			return trace.Wrap(err)
 		}
 		if !l.EventsOff {
-			stmt, err = tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_value) values(?, ?, ?, ?, ?)")
+			stmt, err = tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_expires, kv_value) values(?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return trace.Wrap(err)
 			}
-			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(replaceWith.Key), id(created), replaceWith.Value); err != nil {
+			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(replaceWith.Key), id(created), expires(replaceWith.Expires), replaceWith.Value); err != nil {
 				return trace.Wrap(err)
 			}
 		}
@@ -357,11 +358,11 @@ func (l *LiteBackend) Put(ctx context.Context, i backend.Item) (*backend.Lease, 
 	err := l.inTransaction(ctx, func(tx *sql.Tx) error {
 		created := l.clock.Now().UTC()
 		if !l.EventsOff {
-			stmt, err := tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_value) values(?, ?, ?, ?, ?)")
+			stmt, err := tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_expires, kv_value) values(?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return trace.Wrap(err)
 			}
-			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(i.Key), id(created), i.Value); err != nil {
+			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(i.Key), id(created), expires(i.Expires), i.Value); err != nil {
 				return trace.Wrap(err)
 			}
 		}
@@ -469,7 +470,7 @@ func (l *LiteBackend) putRangeInTransaction(ctx context.Context, tx *sql.Tx, ite
 	var eventsStmt *sql.Stmt
 	var err error
 	if !l.EventsOff {
-		eventsStmt, err = tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_value) values(?, ?, ?, ?, ?)")
+		eventsStmt, err = tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_expires, kv_value) values(?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			return trace.Wrap(err)
 		}
@@ -481,7 +482,7 @@ func (l *LiteBackend) putRangeInTransaction(ctx context.Context, tx *sql.Tx, ite
 	for i := range items {
 		created := l.clock.Now().UTC()
 		if !l.EventsOff && !forceEventsOff {
-			if _, err := eventsStmt.ExecContext(ctx, backend.OpPut, created, string(items[i].Key), id(created), items[i].Value); err != nil {
+			if _, err := eventsStmt.ExecContext(ctx, backend.OpPut, created, string(items[i].Key), id(created), expires(items[i].Expires), items[i].Value); err != nil {
 				return trace.Wrap(err)
 			}
 		}
@@ -515,11 +516,11 @@ func (l *LiteBackend) Update(ctx context.Context, i backend.Item) (*backend.Leas
 			return trace.NotFound("key %v is not found", string(i.Key))
 		}
 		if !l.EventsOff {
-			stmt, err = tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_value) values(?, ?, ?, ?, ?)")
+			stmt, err = tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_expires, kv_value) values(?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return trace.Wrap(err)
 			}
-			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(i.Key), id(created), i.Value); err != nil {
+			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(i.Key), id(created), expires(i.Expires), i.Value); err != nil {
 				return trace.Wrap(err)
 			}
 		}
@@ -537,28 +538,33 @@ func (l *LiteBackend) Get(ctx context.Context, key []byte) (*backend.Item, error
 		return nil, trace.BadParameter("missing parameter key")
 	}
 	var item backend.Item
-	now := l.clock.Now().UTC()
 	err := l.inTransaction(ctx, func(tx *sql.Tx) error {
-		q, err := tx.PrepareContext(ctx,
-			"SELECT key, value, expires, modified FROM kv WHERE key = ? AND (expires IS NULL OR expires > ?) LIMIT 1")
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		row := q.QueryRowContext(ctx, string(key), now)
-		var expires NullTime
-		if err := row.Scan(&item.Key, &item.Value, &expires, &item.ID); err != nil {
-			if err == sql.ErrNoRows {
-				return trace.NotFound("key %v is not found", string(key))
-			}
-			return trace.Wrap(err)
-		}
-		item.Expires = expires.Time
-		return nil
+		return l.getInTransaction(ctx, key, tx, &item)
 	})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 	return &item, nil
+}
+
+// getInTransaction returns an item, works in transaction
+func (l *LiteBackend) getInTransaction(ctx context.Context, key []byte, tx *sql.Tx, item *backend.Item) error {
+	now := l.clock.Now().UTC()
+	q, err := tx.PrepareContext(ctx,
+		"SELECT key, value, expires, modified FROM kv WHERE key = ? AND (expires IS NULL OR expires > ?) LIMIT 1")
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	row := q.QueryRowContext(ctx, string(key), now)
+	var expires NullTime
+	if err := row.Scan(&item.Key, &item.Value, &expires, &item.ID); err != nil {
+		if err == sql.ErrNoRows {
+			return trace.NotFound("key %v is not found", string(key))
+		}
+		return trace.Wrap(err)
+	}
+	item.Expires = expires.Time
+	return nil
 }
 
 // GetRange returns query range
@@ -610,6 +616,21 @@ func (l *LiteBackend) KeepAlive(ctx context.Context, lease backend.Lease, expire
 	}
 	now := l.clock.Now().UTC()
 	return l.inTransaction(ctx, func(tx *sql.Tx) error {
+		var item backend.Item
+		err := l.getInTransaction(ctx, lease.Key, tx, &item)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		created := l.clock.Now().UTC()
+		if !l.EventsOff {
+			stmt, err := tx.PrepareContext(ctx, "INSERT INTO events(type, created, kv_key, kv_modified, kv_expires, kv_value) values(?, ?, ?, ?, ?, ?)")
+			if err != nil {
+				return trace.Wrap(err)
+			}
+			if _, err := stmt.ExecContext(ctx, backend.OpPut, created, string(item.Key), id(created), expires.UTC(), item.Value); err != nil {
+				return trace.Wrap(err)
+			}
+		}
 		stmt, err := tx.PrepareContext(ctx, "UPDATE kv SET expires = ?, modified = ? WHERE key = ?")
 		if err != nil {
 			return trace.Wrap(err)

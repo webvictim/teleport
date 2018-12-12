@@ -306,6 +306,10 @@ func (s *BackendSuite) KeepAlive(c *check.C) {
 	prefix := MakePrefix()
 	ctx := context.Background()
 
+	watcher, err := s.B.NewWatcher(ctx, backend.Watch{Prefixes: [][]byte{prefix("")}})
+	c.Assert(err, check.IsNil)
+	defer watcher.Close()
+
 	item := backend.Item{Key: prefix("key"), Value: []byte("val1"), Expires: addSeconds(time.Now(), 2)}
 	lease, err := s.B.Put(ctx, item)
 	c.Assert(err, check.IsNil)
@@ -330,6 +334,19 @@ func (s *BackendSuite) KeepAlive(c *check.C) {
 	c.Assert(string(out.Value), check.Equals, string(item.Value))
 	c.Assert(string(out.Key), check.Equals, string(item.Key))
 
+	events := collectEvents(c, watcher, 3)
+	c.Assert(events[1].Type, check.Equals, backend.OpPut)
+	c.Assert(string(events[1].Item.Key), check.Equals, string(item.Key))
+	c.Assert(events[2].Type, check.Equals, backend.OpPut)
+	c.Assert(string(events[2].Item.Key), check.Equals, string(item.Key))
+
+	c.Assert(string(events[1].Item.Value), check.Equals, string(item.Value))
+	c.Assert(string(events[2].Item.Value), check.Equals, string(item.Value))
+
+	c.Assert(events[1].Item.Expires.IsZero(), check.Not(check.Equals), true, check.Commentf("expected non zero expiration time"))
+	c.Assert(events[2].Item.Expires.IsZero(), check.Not(check.Equals), true, check.Commentf("expected non zero expiration time"))
+	c.Assert(events[2].Item.Expires.After(events[1].Item.Expires), check.Equals, true, check.Commentf("expected %v after %v", events[2].Item.Expires, events[1].Item.Expires))
+
 	err = s.B.Delete(ctx, item.Key)
 	c.Assert(err, check.IsNil)
 
@@ -341,15 +358,39 @@ func (s *BackendSuite) KeepAlive(c *check.C) {
 	fixtures.ExpectNotFound(c, err)
 }
 
+func collectEvents(c *check.C, watcher backend.Watcher, count int) []backend.Event {
+	var events []backend.Event
+	for i := 0; i < count; i++ {
+		select {
+		case e := <-watcher.Events():
+			events = append(events, e)
+		case <-watcher.Done():
+			c.Fatalf("Watcher has unexpectedly closed.")
+		case <-time.After(2 * time.Second):
+			c.Fatalf("Timeout waiting for event.")
+		}
+	}
+	return events
+}
+
 // Events tests scenarios with event watches
 func (s *BackendSuite) Events(c *check.C) {
 	prefix := MakePrefix()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	watcher, err := s.B.NewWatcher(ctx, backend.Watch{Prefix: prefix("")})
+	watcher, err := s.B.NewWatcher(ctx, backend.Watch{Prefixes: [][]byte{prefix("")}})
 	c.Assert(err, check.IsNil)
 	defer watcher.Close()
+
+	select {
+	case e := <-watcher.Events():
+		c.Assert(string(e.Type), check.Equals, string(backend.OpInit))
+	case <-watcher.Done():
+		c.Fatalf("Watcher has unexpectedly closed.")
+	case <-time.After(2 * time.Second):
+		c.Fatalf("Timeout waiting for event.")
+	}
 
 	item := &backend.Item{Key: prefix("b"), Value: []byte("val")}
 	_, err = s.B.Put(ctx, *item)
@@ -378,7 +419,7 @@ func (s *BackendSuite) WatchersClose(c *check.C) {
 	b, err := s.NewBackend()
 	c.Assert(err, check.IsNil)
 
-	watcher, err := b.NewWatcher(ctx, backend.Watch{Prefix: prefix("")})
+	watcher, err := b.NewWatcher(ctx, backend.Watch{Prefixes: [][]byte{prefix("")}})
 	c.Assert(err, check.IsNil)
 
 	// cancel context -> get watcher to close
@@ -391,7 +432,7 @@ func (s *BackendSuite) WatchersClose(c *check.C) {
 	}
 
 	// closing backend should close associated watcher too
-	watcher, err = b.NewWatcher(context.Background(), backend.Watch{Prefix: prefix("")})
+	watcher, err = b.NewWatcher(context.Background(), backend.Watch{Prefixes: [][]byte{prefix("")}})
 	c.Assert(err, check.IsNil)
 
 	b.Close()

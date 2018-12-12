@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Gravitational, Inc.
+Copyright 2019 Gravitational, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,17 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package state
+package services
 
-import (
-	"github.com/gravitational/teleport/lib/auth"
-)
-
-// NewCachingAcessPoint returns new caching access point using
-// access point policy
-type NewCachingAccessPoint func(clt auth.ClientI, cacheName []string) (auth.AccessPoint, error)
-
-// NoCache is a no cache used for access point
-func NoCache(clt auth.ClientI, cacheName []string) (auth.AccessPoint, error) {
-	return clt, nil
+// Services collects all services
+type Services interface {
+	UsersService
+	Provisioner
+	Trust
+	Events
+	ClusterConfiguration
+	Access
+	Presence
 }

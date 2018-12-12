@@ -478,14 +478,14 @@ func (s *remoteSite) sendDiscoveryRequest() error {
 	if len(disconnectedProxies) == 0 {
 		return nil
 	}
-	clusterName, err := s.localAccessPoint.GetDomainName()
+	clusterName, err := s.localAccessPoint.GetClusterName()
 	if err != nil {
 		return trace.Wrap(err)
 	}
 	connInfo := s.copyConnInfo()
 	s.Debugf("proxy %q is going to request discovery for: %q", connInfo.GetProxyName(), Proxies(disconnectedProxies))
 	req := discoveryRequest{
-		ClusterName: clusterName,
+		ClusterName: clusterName.GetClusterName(),
 		Proxies:     disconnectedProxies,
 	}
 	payload, err := marshalDiscoveryRequest(req)

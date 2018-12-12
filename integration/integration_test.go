@@ -1260,7 +1260,8 @@ func (s *IntSuite) TestMapRoles(c *check.C) {
 	err = aux.Process.GetAuthServer().UpsertRole(role)
 	c.Assert(err, check.IsNil)
 	trustedClusterToken := "trusted-clsuter-token"
-	err = main.Process.GetAuthServer().UpsertToken(trustedClusterToken, []teleport.Role{teleport.RoleTrustedCluster}, backend.Forever)
+	err = main.Process.GetAuthServer().UpsertToken(
+		services.MustCreateProvisionToken(trustedClusterToken, []teleport.Role{teleport.RoleTrustedCluster}, time.Time{}))
 	c.Assert(err, check.IsNil)
 	trustedCluster := main.Secrets.AsTrustedCluster(trustedClusterToken, services.RoleMap{
 		{Remote: mainDevs, Local: []string{auxDevs}},
@@ -1479,7 +1480,8 @@ func (s *IntSuite) trustedClusters(c *check.C, multiplex bool) {
 	err = aux.Process.GetAuthServer().UpsertRole(role)
 	c.Assert(err, check.IsNil)
 	trustedClusterToken := "trusted-clsuter-token"
-	err = main.Process.GetAuthServer().UpsertToken(trustedClusterToken, []teleport.Role{teleport.RoleTrustedCluster}, backend.Forever)
+	err = main.Process.GetAuthServer().UpsertToken(
+		services.MustCreateProvisionToken(trustedClusterToken, []teleport.Role{teleport.RoleTrustedCluster}, time.Time{}))
 	c.Assert(err, check.IsNil)
 	trustedCluster := main.Secrets.AsTrustedCluster(trustedClusterToken, services.RoleMap{
 		{Remote: mainDevs, Local: []string{auxDevs}},
@@ -2588,7 +2590,8 @@ func (s *IntSuite) rotateTrustedClusters(c *check.C) {
 	err = aux.Process.GetAuthServer().UpsertRole(role)
 	c.Assert(err, check.IsNil)
 	trustedClusterToken := "trusted-clsuter-token"
-	err = svc.GetAuthServer().UpsertToken(trustedClusterToken, []teleport.Role{teleport.RoleTrustedCluster}, backend.Forever)
+	err = svc.GetAuthServer().UpsertToken(
+		services.MustCreateProvisionToken(trustedClusterToken, []teleport.Role{teleport.RoleTrustedCluster}, time.Time{}))
 	c.Assert(err, check.IsNil)
 	trustedCluster := main.Secrets.AsTrustedCluster(trustedClusterToken, services.RoleMap{
 		{Remote: mainDevs, Local: []string{auxDevs}},

@@ -56,6 +56,7 @@ func (s *ServicesSuite) SetUpTest(c *check.C) {
 	suite.Access = NewAccessService(s.bk)
 	suite.EventsS = NewEventsService(s.bk)
 	suite.ChangesC = make(chan interface{})
+	suite.ConfigS = NewClusterConfigurationService(s.bk)
 	s.suite = suite
 }
 
@@ -121,4 +122,8 @@ func (s *ServicesSuite) TestRemoteClustersCRUD(c *check.C) {
 
 func (s *ServicesSuite) TestEvents(c *check.C) {
 	s.suite.Events(c)
+}
+
+func (s *ServicesSuite) TestEventsClusterConfig(c *check.C) {
+	s.suite.EventsClusterConfig(c)
 }

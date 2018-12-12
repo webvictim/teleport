@@ -24,6 +24,7 @@ import (
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
+	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/tlsca"
@@ -428,7 +429,7 @@ func (process *TeleportProcess) syncRotationStateCycle() error {
 		return nil
 	}
 
-	watcher, err := process.newWatcher(conn, services.Watch{Kinds: []string{services.KindCertAuthority}})
+	watcher, err := process.newWatcher(conn, services.Watch{Kinds: []services.WatchKind{{Kind: services.KindCertAuthority}}})
 	if err != nil {
 		return trace.Wrap(err)
 	}
@@ -439,6 +440,9 @@ func (process *TeleportProcess) syncRotationStateCycle() error {
 	for {
 		select {
 		case event := <-watcher.Events():
+			if event.Type == backend.OpInit || event.Type == backend.OpDelete {
+				continue
+			}
 			ca, ok := event.Resource.(services.CertAuthority)
 			if !ok {
 				process.Debugf("Skipping event %v for %v", event.Type, event.Resource.GetName())

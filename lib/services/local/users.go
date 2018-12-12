@@ -68,7 +68,7 @@ func (s *IdentityService) GetUsers() ([]services.User, error) {
 		if !bytes.HasSuffix(item.Key, []byte(paramsPrefix)) {
 			continue
 		}
-		u, err := services.GetUserMarshaler().UnmarshalUser(item.Value)
+		u, err := services.GetUserMarshaler().UnmarshalUser(item.Value, services.WithResourceID(item.ID))
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -128,7 +128,7 @@ func (s *IdentityService) GetUser(user string) (services.User, error) {
 	if err != nil {
 		return nil, trace.NotFound("user %q is not found", user)
 	}
-	u, err := services.GetUserMarshaler().UnmarshalUser(item.Value)
+	u, err := services.GetUserMarshaler().UnmarshalUser(item.Value, services.WithResourceID(item.ID))
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}

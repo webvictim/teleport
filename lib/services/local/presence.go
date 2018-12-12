@@ -79,7 +79,7 @@ func (s *PresenceService) GetNamespaces() ([]services.Namespace, error) {
 	}
 	out := make([]services.Namespace, len(result.Items))
 	for i, item := range result.Items {
-		ns, err := services.UnmarshalNamespace(item.Value)
+		ns, err := services.UnmarshalNamespace(item.Value, services.WithResourceID(item.ID))
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -120,7 +120,7 @@ func (s *PresenceService) GetNamespace(name string) (*services.Namespace, error)
 		}
 		return nil, trace.Wrap(err)
 	}
-	return services.UnmarshalNamespace(item.Value)
+	return services.UnmarshalNamespace(item.Value, services.WithResourceID(item.ID))
 }
 
 // DeleteNamespace deletes a namespace with all the keys from the backend
@@ -144,7 +144,7 @@ func (s *PresenceService) getServers(kind, prefix string) ([]services.Server, er
 	}
 	servers := make([]services.Server, len(result.Items))
 	for i, item := range result.Items {
-		server, err := services.GetServerMarshaler().UnmarshalServer(item.Value, kind, services.SkipValidation())
+		server, err := services.GetServerMarshaler().UnmarshalServer(item.Value, kind, services.SkipValidation(), services.WithResourceID(item.ID))
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -174,6 +174,12 @@ func (s *PresenceService) DeleteAllNodes(namespace string) error {
 	return s.DeleteRange(context.TODO(), startKey, backend.RangeEnd(startKey))
 }
 
+// DeleteNode deletes node
+func (s *PresenceService) DeleteNode(namespace string, name string) error {
+	key := backend.Key(namespacesPrefix, namespace, nodesPrefix, name)
+	return s.Delete(context.TODO(), key)
+}
+
 // GetNodes returns a list of registered servers
 func (s *PresenceService) GetNodes(namespace string, opts ...services.MarshalOption) ([]services.Server, error) {
 	if namespace == "" {
@@ -192,7 +198,7 @@ func (s *PresenceService) GetNodes(namespace string, opts ...services.MarshalOpt
 		server, err := services.GetServerMarshaler().UnmarshalServer(
 			item.Value,
 			services.KindNode,
-			opts...)
+			services.AddOptions(opts, services.WithResourceID(item.ID))...)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -300,6 +306,12 @@ func (s *PresenceService) DeleteAllProxies() error {
 	return s.DeleteRange(context.TODO(), startKey, backend.RangeEnd(startKey))
 }
 
+// DeleteProxy deletes proxy
+func (s *PresenceService) DeleteProxy(name string) error {
+	key := backend.Key(proxiesPrefix, name)
+	return s.Delete(context.TODO(), key)
+}
+
 // DeleteAllReverseTunnels deletes all reverse tunnels
 func (s *PresenceService) DeleteAllReverseTunnels() error {
 	startKey := backend.Key(reverseTunnelsPrefix)
@@ -329,7 +341,7 @@ func (s *PresenceService) GetReverseTunnel(name string) (services.ReverseTunnel,
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return services.GetReverseTunnelMarshaler().UnmarshalReverseTunnel(item.Value)
+	return services.GetReverseTunnelMarshaler().UnmarshalReverseTunnel(item.Value, services.WithResourceID(item.ID))
 }
 
 // GetReverseTunnels returns a list of registered servers
@@ -341,7 +353,7 @@ func (s *PresenceService) GetReverseTunnels() ([]services.ReverseTunnel, error) 
 	}
 	tunnels := make([]services.ReverseTunnel, len(result.Items))
 	for i, item := range result.Items {
-		tunnel, err := services.GetReverseTunnelMarshaler().UnmarshalReverseTunnel(item.Value)
+		tunnel, err := services.GetReverseTunnelMarshaler().UnmarshalReverseTunnel(item.Value, services.WithResourceID(item.ID))
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -453,7 +465,7 @@ func (s *PresenceService) GetTunnelConnection(clusterName, connectionName string
 		}
 		return nil, trace.Wrap(err)
 	}
-	conn, err := services.UnmarshalTunnelConnection(item.Value, opts...)
+	conn, err := services.UnmarshalTunnelConnection(item.Value, services.AddOptions(opts, services.WithResourceID(item.ID))...)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -472,7 +484,7 @@ func (s *PresenceService) GetTunnelConnections(clusterName string, opts ...servi
 	}
 	conns := make([]services.TunnelConnection, len(result.Items))
 	for i, item := range result.Items {
-		conn, err := services.UnmarshalTunnelConnection(item.Value, opts...)
+		conn, err := services.UnmarshalTunnelConnection(item.Value, services.AddOptions(opts, services.WithResourceID(item.ID))...)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -492,7 +504,7 @@ func (s *PresenceService) GetAllTunnelConnections(opts ...services.MarshalOption
 
 	conns := make([]services.TunnelConnection, len(result.Items))
 	for i, item := range result.Items {
-		conn, err := services.UnmarshalTunnelConnection(item.Value, opts...)
+		conn, err := services.UnmarshalTunnelConnection(item.Value, services.AddOptions(opts, services.WithResourceID(item.ID))...)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}

@@ -186,6 +186,11 @@ func (s *AuthServer) validateGithubAuthCallback(q url.Values) (*GithubAuthRespon
 		response.Session = session
 	}
 	if len(req.PublicKey) != 0 {
+		clusterName, err := s.GetClusterName()
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+
 		certTTL := utils.MinTTL(defaults.OAuth2TTL, req.CertTTL)
 		certs, err := s.generateUserCert(certRequest{
 			user:          user,
@@ -203,7 +208,7 @@ func (s *AuthServer) validateGithubAuthCallback(q url.Values) (*GithubAuthRespon
 		// Return the host CA for this cluster only.
 		authority, err := s.GetCertAuthority(services.CertAuthID{
 			Type:       services.HostCA,
-			DomainName: s.clusterName.GetClusterName(),
+			DomainName: clusterName.GetClusterName(),
 		}, false)
 		if err != nil {
 			return nil, trace.Wrap(err)

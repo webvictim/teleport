@@ -341,6 +341,10 @@ func (a *AuthServer) validateSAMLResponse(samlResponse string) (*SAMLAuthRespons
 	}
 
 	if len(request.PublicKey) != 0 {
+		clusterName, err := a.GetClusterName()
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
 		certTTL := utils.MinTTL(sessionTTL, request.CertTTL)
 		certs, err := a.generateUserCert(certRequest{
 			user:          user,
@@ -358,7 +362,7 @@ func (a *AuthServer) validateSAMLResponse(samlResponse string) (*SAMLAuthRespons
 		// Return the host CA for this cluster only.
 		authority, err := a.GetCertAuthority(services.CertAuthID{
 			Type:       services.HostCA,
-			DomainName: a.clusterName.GetClusterName(),
+			DomainName: clusterName.GetClusterName(),
 		}, false)
 		if err != nil {
 			return nil, trace.Wrap(err)

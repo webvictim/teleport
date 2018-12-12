@@ -235,7 +235,6 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, error) {
 
 			// Override user passed in cluster name with what is in the backend.
 			cfg.ClusterName = cn
-			asrv.clusterName = cn
 		}
 	}
 	log.Debugf("Cluster configuration: %v.", cfg.ClusterName)
@@ -409,11 +408,7 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, error) {
 }
 
 func migrateLegacyResources(cfg InitConfig, asrv *AuthServer) error {
-	err := migrateUsers(asrv)
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	err = migrateRemoteClusters(asrv)
+	err := migrateRemoteClusters(asrv)
 	if err != nil {
 		return trace.Wrap(err)
 	}
@@ -461,38 +456,6 @@ func migrateIdentity(role teleport.Role, dataDir string, storage *ProcessStorage
 		}
 	}
 	log.Infof("Identity %v has been migrated to new on-disk format.", role)
-	return nil
-}
-
-func migrateUsers(asrv *AuthServer) error {
-	users, err := asrv.GetUsers()
-	if err != nil {
-		return trace.Wrap(err)
-	}
-
-	for i := range users {
-		user := users[i]
-		raw, ok := (user.GetRawObject()).(services.UserV1)
-		if !ok {
-			continue
-		}
-		log.Infof("Migrating legacy user: %v.", user.GetName())
-
-		// create role for user and upsert to backend
-		role := services.RoleForUser(user)
-		role.SetLogins(services.Allow, raw.AllowedLogins)
-		err = asrv.UpsertRole(role)
-		if err != nil {
-			return trace.Wrap(err)
-		}
-
-		// upsert new user to backend
-		user.AddRole(role.GetName())
-		if err := asrv.UpsertUser(user); err != nil {
-			return trace.Wrap(err)
-		}
-	}
-
 	return nil
 }
 

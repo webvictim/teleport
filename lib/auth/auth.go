@@ -26,7 +26,6 @@ package auth
 import (
 	"context"
 	"crypto"
-	"crypto/x509"
 	"fmt"
 	"golang.org/x/crypto/ssh"
 	"math/rand"
@@ -62,9 +61,6 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 	if cfg.Trust == nil {
 		cfg.Trust = local.NewCAService(cfg.Backend)
 	}
-	if cfg.ClusterName == nil {
-		return nil, trace.BadParameter("missing parameter ClusterName")
-	}
 	if cfg.Presence == nil {
 		cfg.Presence = local.NewPresenceService(cfg.Backend)
 	}
@@ -89,24 +85,25 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 
 	closeCtx, cancelFunc := context.WithCancel(context.TODO())
 	as := AuthServer{
-		clusterName:          cfg.ClusterName,
-		bk:                   cfg.Backend,
-		Authority:            cfg.Authority,
-		Trust:                cfg.Trust,
-		Presence:             cfg.Presence,
-		Provisioner:          cfg.Provisioner,
-		Identity:             cfg.Identity,
-		Access:               cfg.Access,
-		AuthServiceName:      cfg.AuthServiceName,
-		ClusterConfiguration: cfg.ClusterConfiguration,
-		IAuditLog:            cfg.AuditLog,
-		Events:               cfg.Events,
-		oidcClients:          make(map[string]*oidcClient),
-		samlProviders:        make(map[string]*samlProvider),
-		githubClients:        make(map[string]*githubClient),
-		cancelFunc:           cancelFunc,
-		closeCtx:             closeCtx,
-		kubeconfigPath:       cfg.KubeconfigPath,
+		bk:              cfg.Backend,
+		Authority:       cfg.Authority,
+		AuthServiceName: cfg.AuthServiceName,
+		oidcClients:     make(map[string]*oidcClient),
+		samlProviders:   make(map[string]*samlProvider),
+		githubClients:   make(map[string]*githubClient),
+		cancelFunc:      cancelFunc,
+		closeCtx:        closeCtx,
+		kubeconfigPath:  cfg.KubeconfigPath,
+		AuthServices: AuthServices{
+			Trust:                cfg.Trust,
+			Presence:             cfg.Presence,
+			Provisioner:          cfg.Provisioner,
+			Identity:             cfg.Identity,
+			Access:               cfg.Access,
+			ClusterConfiguration: cfg.ClusterConfiguration,
+			IAuditLog:            cfg.AuditLog,
+			Events:               cfg.Events,
+		},
 	}
 	for _, o := range opts {
 		o(&as)
@@ -118,6 +115,17 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 	return &as, nil
 }
 
+type AuthServices struct {
+	services.Trust
+	services.Presence
+	services.Provisioner
+	services.Identity
+	services.Access
+	services.ClusterConfiguration
+	services.Events
+	events.IAuditLog
+}
+
 // AuthServer keeps the cluster together. It acts as a certificate authority (CA) for
 // a cluster and:
 //   - generates the keypair for the node it's running on
@@ -126,7 +134,7 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 //   - same for users and their sessions
 //   - checks public keys to see if they're signed by it (can be trusted or not)
 type AuthServer struct {
-	lock          sync.Mutex
+	lock          sync.RWMutex
 	oidcClients   map[string]*oidcClient
 	samlProviders map[string]*samlProvider
 	githubClients map[string]*githubClient
@@ -143,16 +151,9 @@ type AuthServer struct {
 	// It usually defaults to the hostname of the machine the Auth service runs on.
 	AuthServiceName string
 
-	services.Trust
-	services.Presence
-	services.Provisioner
-	services.Identity
-	services.Access
-	services.ClusterConfiguration
-	services.Events
-	events.IAuditLog
-
-	clusterName services.ClusterName
+	// AuthServices encapsulate services - provisioner, trust, etc
+	// used by the auth server in a separate structure
+	AuthServices
 
 	// privateKey is used in tests to use pre-generated private keys
 	privateKey []byte
@@ -162,6 +163,28 @@ type AuthServer struct {
 
 	// kubeconfigPath is a path to PEM encoded kubernetes CA certificate
 	kubeconfigPath string
+
+	// cache is a fast cache that allows auth server
+	// to use cache for most frequent operations,
+	// if not set, cache uses itself
+	cache AuthCache
+}
+
+// SetCache sets cache used by auth server
+func (a *AuthServer) SetCache(clt AuthCache) {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	a.cache = clt
+}
+
+// GetCache returns cache used by auth server
+func (a *AuthServer) GetCache() AuthCache {
+	a.lock.RLock()
+	defer a.lock.RUnlock()
+	if a.cache == nil {
+		return &a.AuthServices
+	}
+	return a.cache
 }
 
 // runPeriodicOperations runs some periodic bookkeeping operations
@@ -202,8 +225,8 @@ func (a *AuthServer) Close() error {
 }
 
 func (a *AuthServer) GetClock() clockwork.Clock {
-	a.lock.Lock()
-	defer a.lock.Unlock()
+	a.lock.RLock()
+	defer a.lock.RUnlock()
 	return a.clock
 }
 
@@ -221,14 +244,18 @@ func (a *AuthServer) SetAuditLog(auditLog events.IAuditLog) {
 
 // GetClusterName returns the domain name that identifies this authority server.
 // Also known as "cluster name"
-func (a *AuthServer) GetClusterName() (services.ClusterName, error) {
-	return a.clusterName, nil
+func (a *AuthServer) GetClusterName(opts ...services.MarshalOption) (services.ClusterName, error) {
+	return a.GetCache().GetClusterName()
 }
 
 // GetDomainName returns the domain name that identifies this authority server.
 // Also known as "cluster name"
 func (a *AuthServer) GetDomainName() (string, error) {
-	return a.clusterName.GetClusterName(), nil
+	clusterName, err := a.GetClusterName()
+	if err != nil {
+		return "", trace.Wrap(err)
+	}
+	return clusterName.GetClusterName(), nil
 }
 
 // LocalCAResponse contains PEM-encoded local CAs.
@@ -239,10 +266,14 @@ type LocalCAResponse struct {
 
 // GetClusterCACert returns the CAs for the local cluster without signing keys.
 func (a *AuthServer) GetClusterCACert() (*LocalCAResponse, error) {
+	clusterName, err := a.GetClusterName()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
 	// Extract the TLS CA for this cluster.
-	hostCA, err := a.Trust.GetCertAuthority(services.CertAuthID{
+	hostCA, err := a.GetCache().GetCertAuthority(services.CertAuthID{
 		Type:       services.HostCA,
-		DomainName: a.clusterName.GetClusterName(),
+		DomainName: clusterName.GetClusterName(),
 	}, false)
 	if err != nil {
 		return nil, trace.Wrap(err)
@@ -674,6 +705,9 @@ func (req *GenerateTokenRequest) CheckAndSetDefaults() error {
 			return trace.Wrap(err)
 		}
 	}
+	if req.TTL == 0 {
+		req.TTL = defaults.ProvisioningTokenTTL
+	}
 	if req.Token == "" {
 		token, err := utils.CryptoRandomHex(TokenLenBytes)
 		if err != nil {
@@ -689,54 +723,14 @@ func (s *AuthServer) GenerateToken(req GenerateTokenRequest) (string, error) {
 	if err := req.CheckAndSetDefaults(); err != nil {
 		return "", trace.Wrap(err)
 	}
-	if err := s.Provisioner.UpsertToken(req.Token, req.Roles, req.TTL); err != nil {
+	token, err := services.NewProvisionToken(req.Token, req.Roles, s.clock.Now().UTC().Add(req.TTL))
+	if err != nil {
+		return "", trace.Wrap(err)
+	}
+	if err := s.Provisioner.UpsertToken(token); err != nil {
 		return "", trace.Wrap(err)
 	}
 	return req.Token, nil
-}
-
-// ClientCertPool returns trusted x509 cerificate authority pool
-func (s *AuthServer) ClientCertPool(clusterName string) (*x509.CertPool, error) {
-	pool := x509.NewCertPool()
-	var authorities []services.CertAuthority
-	if clusterName == "" {
-		hostCAs, err := s.GetCertAuthorities(services.HostCA, false, services.SkipValidation())
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		userCAs, err := s.GetCertAuthorities(services.UserCA, false, services.SkipValidation())
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		authorities = append(authorities, hostCAs...)
-		authorities = append(authorities, userCAs...)
-	} else {
-		hostCA, err := s.GetCertAuthority(
-			services.CertAuthID{Type: services.HostCA, DomainName: clusterName},
-			false, services.SkipValidation())
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		userCA, err := s.GetCertAuthority(
-			services.CertAuthID{Type: services.UserCA, DomainName: clusterName},
-			false, services.SkipValidation())
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		authorities = append(authorities, hostCA)
-		authorities = append(authorities, userCA)
-	}
-
-	for _, auth := range authorities {
-		for _, keyPair := range auth.GetTLSKeyPairs() {
-			cert, err := tlsca.ParseCertificatePEM(keyPair.Cert)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			pool.AddCert(cert)
-		}
-	}
-	return pool, nil
 }
 
 // ExtractHostID returns host id based on the hostname
@@ -795,6 +789,11 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 		return nil, trace.Wrap(err)
 	}
 
+	clusterName, err := s.GetClusterName()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
 	// If the request contains 0.0.0.0, this implies an advertise IP was not
 	// specified on the node. Try and guess what the address by replacing 0.0.0.0
 	// with the RemoteAddr as known to the Auth Server.
@@ -805,7 +804,6 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 
 	var cryptoPubKey crypto.PublicKey
 	var privateKeyPEM, pubSSHKey []byte
-	var err error
 	if req.PublicSSHKey != nil || req.PublicTLSKey != nil {
 		_, _, _, _, err := ssh.ParseAuthorizedKey(req.PublicSSHKey)
 		if err != nil {
@@ -832,12 +830,12 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 	}
 
 	// get the certificate authority that will be signing the public key of the host
-	ca, err := s.Trust.GetCertAuthority(services.CertAuthID{
+	ca, err := s.GetCache().GetCertAuthority(services.CertAuthID{
 		Type:       services.HostCA,
-		DomainName: s.clusterName.GetClusterName(),
+		DomainName: clusterName.GetClusterName(),
 	}, true)
 	if err != nil {
-		return nil, trace.BadParameter("failed to load host CA for '%s': %v", s.clusterName, err)
+		return nil, trace.BadParameter("failed to load host CA for %q: %v", clusterName.GetClusterName(), err)
 	}
 
 	tlsAuthority, err := ca.TLSCA()
@@ -856,7 +854,7 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 		PublicHostKey:       pubSSHKey,
 		HostID:              req.HostID,
 		NodeName:            req.NodeName,
-		ClusterName:         s.clusterName.GetClusterName(),
+		ClusterName:         clusterName.GetClusterName(),
 		Roles:               req.Roles,
 		Principals:          req.AdditionalPrincipals,
 	})
@@ -865,7 +863,7 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 	}
 	// generate host TLS certificate
 	identity := tlsca.Identity{
-		Username: HostFQDN(req.HostID, s.clusterName.GetClusterName()),
+		Username: HostFQDN(req.HostID, clusterName.GetClusterName()),
 		Groups:   req.Roles.StringSlice(),
 	}
 	certRequest := tlsca.CertificateRequest{
@@ -898,7 +896,7 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 // a list of roles this token allows its owner to assume, or an error if the token
 // cannot be found.
 func (s *AuthServer) ValidateToken(token string) (roles teleport.Roles, e error) {
-	tkns, err := s.GetStaticTokens()
+	tkns, err := s.GetCache().GetStaticTokens()
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -906,14 +904,14 @@ func (s *AuthServer) ValidateToken(token string) (roles teleport.Roles, e error)
 	// First check if the token is a static token. If it is, return right away.
 	// Static tokens have no expiration.
 	for _, st := range tkns.GetStaticTokens() {
-		if st.Token == token {
-			return st.Roles, nil
+		if st.GetName() == token {
+			return st.GetRoles(), nil
 		}
 	}
 
 	// If it's not a static token, check if it's a ephemeral token in the backend.
 	// If a ephemeral token is found, make sure it's still valid.
-	tok, err := s.Provisioner.GetToken(token)
+	tok, err := s.GetCache().GetToken(token)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -921,15 +919,15 @@ func (s *AuthServer) ValidateToken(token string) (roles teleport.Roles, e error)
 		return nil, trace.AccessDenied("token expired")
 	}
 
-	return tok.Roles, nil
+	return tok.GetRoles(), nil
 }
 
 // checkTokenTTL checks if the token is still valid. If it is not, the token
 // is removed from the backend and returns false. Otherwise returns true.
-func (s *AuthServer) checkTokenTTL(tok *services.ProvisionToken) bool {
+func (s *AuthServer) checkTokenTTL(tok services.ProvisionToken) bool {
 	now := s.clock.Now().UTC()
-	if tok.Expires.Before(now) {
-		err := s.DeleteToken(tok.Token)
+	if tok.Expiry().Before(now) {
+		err := s.DeleteToken(tok.GetName())
 		if err != nil {
 			if !trace.IsNotFound(err) {
 				log.Warnf("Unable to delete token from backend: %v.", err)
@@ -1028,7 +1026,7 @@ func (s *AuthServer) RegisterNewAuthServer(token string) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	if !tok.Roles.Include(teleport.RoleAuth) {
+	if !tok.GetRoles().Include(teleport.RoleAuth) {
 		return trace.AccessDenied("role does not match")
 	}
 	if err := s.DeleteToken(token); err != nil {
@@ -1045,7 +1043,7 @@ func (s *AuthServer) DeleteToken(token string) (err error) {
 
 	// is this a static token?
 	for _, st := range tkns.GetStaticTokens() {
-		if st.Token == token {
+		if st.GetName() == token {
 			return trace.BadParameter("token %s is statically configured and cannot be removed", token)
 		}
 	}
@@ -1062,7 +1060,7 @@ func (s *AuthServer) DeleteToken(token string) (err error) {
 
 // GetTokens returns all tokens (machine provisioning ones and user invitation tokens). Machine
 // tokens usually have "node roles", like auth,proxy,node and user invitation tokens have 'signup' role
-func (s *AuthServer) GetTokens() (tokens []services.ProvisionToken, err error) {
+func (s *AuthServer) GetTokens(opts ...services.MarshalOption) (tokens []services.ProvisionToken, err error) {
 	// get node tokens:
 	tokens, err = s.Provisioner.GetTokens()
 	if err != nil {
@@ -1084,11 +1082,11 @@ func (s *AuthServer) GetTokens() (tokens []services.ProvisionToken, err error) {
 	// convert user tokens to machine tokens:
 	for _, t := range userTokens {
 		roles := teleport.Roles{teleport.RoleSignup}
-		tokens = append(tokens, services.ProvisionToken{
-			Token:   t.Token,
-			Expires: t.Expires,
-			Roles:   roles,
-		})
+		tok, err := services.NewProvisionToken(t.Token, roles, t.Expires)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		tokens = append(tokens, tok)
 	}
 	return tokens, nil
 }

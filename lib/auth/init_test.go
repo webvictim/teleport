@@ -184,7 +184,7 @@ func (s *AuthInitSuite) TestAuthPreference(c *C) {
 	})
 	c.Assert(err, IsNil)
 	staticTokens, err := services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{},
+		StaticTokens: []services.ProvisionTokenV1{},
 	})
 	c.Assert(err, IsNil)
 

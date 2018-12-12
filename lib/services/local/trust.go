@@ -205,7 +205,8 @@ func (s *CA) GetCertAuthority(id services.CertAuthID, loadSigningKeys bool, opts
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	ca, err := services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(item.Value, services.AddOptions(opts, services.WithResourceID(item.ID))...)
+	ca, err := services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(
+		item.Value, services.AddOptions(opts, services.WithResourceID(item.ID))...)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -220,12 +221,7 @@ func setSigningKeys(ca services.CertAuthority, loadSigningKeys bool) {
 	if loadSigningKeys {
 		return
 	}
-	ca.SetSigningKeys(nil)
-	keyPairs := ca.GetTLSKeyPairs()
-	for i := range keyPairs {
-		keyPairs[i].Key = nil
-	}
-	ca.SetTLSKeyPairs(keyPairs)
+	services.RemoveCASecrets(ca)
 }
 
 // GetCertAuthorities returns a list of authorities of a given type

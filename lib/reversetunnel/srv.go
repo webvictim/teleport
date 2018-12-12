@@ -35,7 +35,6 @@ import (
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/sshca"
 	"github.com/gravitational/teleport/lib/sshutils"
-	"github.com/gravitational/teleport/lib/state"
 	"github.com/gravitational/teleport/lib/utils"
 
 	"github.com/gravitational/trace"
@@ -100,7 +99,7 @@ type server struct {
 	clusterPeers map[string]*clusterPeers
 
 	// newAccessPoint returns new caching access point
-	newAccessPoint state.NewCachingAccessPoint
+	newAccessPoint auth.NewCachingAccessPoint
 
 	// cancel function will cancel the
 	cancel context.CancelFunc
@@ -143,7 +142,7 @@ type Config struct {
 	LocalAccessPoint auth.AccessPoint
 	// NewCachingAccessPoint returns new caching access points
 	// per remote cluster
-	NewCachingAccessPoint state.NewCachingAccessPoint
+	NewCachingAccessPoint auth.NewCachingAccessPoint
 	// DirectClusters is a list of clusters accessed directly
 	DirectClusters []DirectCluster
 	// Context is a signalling context

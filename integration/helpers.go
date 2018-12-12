@@ -451,7 +451,7 @@ func (i *TeleInstance) GenerateConfig(trustedSecrets []*InstanceSecrets, tconf *
 		return nil, trace.Wrap(err)
 	}
 	tconf.Auth.StaticTokens, err = services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{
+		StaticTokens: []services.ProvisionTokenV1{
 			{
 				Roles: []teleport.Role{teleport.RoleNode, teleport.RoleProxy, teleport.RoleTrustedCluster},
 				Token: "token",

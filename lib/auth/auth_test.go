@@ -84,7 +84,7 @@ func (s *AuthSuite) SetUpTest(c *C) {
 
 	// set static tokens
 	staticTokens, err := services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{},
+		StaticTokens: []services.ProvisionTokenV1{},
 	})
 	c.Assert(err, IsNil)
 	err = s.a.SetStaticTokens(staticTokens)
@@ -216,7 +216,7 @@ func (s *AuthSuite) TestTokensCRUD(c *C) {
 	tokens, err := s.a.GetTokens()
 	c.Assert(err, IsNil)
 	c.Assert(len(tokens), Equals, 1)
-	c.Assert(tokens[0].Token, Equals, tok)
+	c.Assert(tokens[0].GetName(), Equals, tok)
 
 	roles, err := s.a.ValidateToken(tok)
 	c.Assert(err, IsNil)
@@ -299,7 +299,11 @@ func (s *AuthSuite) TestTokensCRUD(c *C) {
 	// lets use static tokens now
 	roles = teleport.Roles{teleport.RoleProxy}
 	st, err := services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{services.ProvisionToken{Token: "static-token-value", Roles: roles, Expires: time.Unix(0, 0).UTC()}},
+		StaticTokens: []services.ProvisionTokenV1{services.ProvisionTokenV1{
+			Token:   "static-token-value",
+			Roles:   roles,
+			Expires: time.Unix(0, 0).UTC(),
+		}},
 	})
 	c.Assert(err, IsNil)
 	err = s.a.SetStaticTokens(st)
@@ -531,7 +535,7 @@ func (s *AuthSuite) TestUpdateConfig(c *C) {
 	// try and set static tokens, this should be successful because the last
 	// one to upsert tokens wins
 	staticTokens, err := services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{services.ProvisionToken{
+		StaticTokens: []services.ProvisionTokenV1{services.ProvisionTokenV1{
 			Token: "bar",
 			Roles: teleport.Roles{teleport.Role("baz")},
 		}},
@@ -547,19 +551,19 @@ func (s *AuthSuite) TestUpdateConfig(c *C) {
 	c.Assert(cn.GetClusterName(), Equals, "me.localhost")
 	st, err = s.a.GetStaticTokens()
 	c.Assert(err, IsNil)
-	c.Assert(st.GetStaticTokens(), DeepEquals, []services.ProvisionToken{services.ProvisionToken{
+	c.Assert(st.GetStaticTokens(), DeepEquals, services.ProvisionTokensFromV1([]services.ProvisionTokenV1{services.ProvisionTokenV1{
 		Token: "bar",
 		Roles: teleport.Roles{teleport.Role("baz")},
-	}})
+	}}))
 
 	// check second auth server and make sure it also has the correct values
 	// new static tokens
 	st, err = authServer.GetStaticTokens()
 	c.Assert(err, IsNil)
-	c.Assert(st.GetStaticTokens(), DeepEquals, []services.ProvisionToken{services.ProvisionToken{
+	c.Assert(st.GetStaticTokens(), DeepEquals, services.ProvisionTokensFromV1([]services.ProvisionTokenV1{services.ProvisionTokenV1{
 		Token: "bar",
 		Roles: teleport.Roles{teleport.Role("baz")},
-	}})
+	}}))
 }
 
 // TestMigrateIdentity tests migration of the identity

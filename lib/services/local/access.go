@@ -49,7 +49,7 @@ func (s *AccessService) GetRoles() ([]services.Role, error) {
 	}
 	out := make([]services.Role, 0, len(result.Items))
 	for _, item := range result.Items {
-		role, err := services.GetRoleMarshaler().UnmarshalRole(item.Value)
+		role, err := services.GetRoleMarshaler().UnmarshalRole(item.Value, services.WithResourceID(item.ID))
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
@@ -111,7 +111,7 @@ func (s *AccessService) GetRole(name string) (services.Role, error) {
 		}
 		return nil, trace.Wrap(err)
 	}
-	return services.GetRoleMarshaler().UnmarshalRole(item.Value)
+	return services.GetRoleMarshaler().UnmarshalRole(item.Value, services.WithResourceID(item.ID))
 }
 
 // DeleteRole deletes a role from the backend
