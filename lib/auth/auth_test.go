@@ -98,6 +98,9 @@ func (s *AuthSuite) SetUpTest(c *C) {
 
 	err = s.a.SetAuthPreference(authPreference)
 	c.Assert(err, IsNil)
+
+	err = s.a.SetClusterConfig(services.DefaultClusterConfig())
+	c.Assert(err, IsNil)
 }
 
 func (s *AuthSuite) TestSessions(c *C) {
@@ -299,7 +302,13 @@ func (s *AuthSuite) TestTokensCRUD(c *C) {
 	// lets use static tokens now
 	roles = teleport.Roles{teleport.RoleProxy}
 	st, err := services.NewStaticTokens(services.StaticTokensSpecV2{
-		StaticTokens: []services.ProvisionToken{services.ProvisionToken{Token: "static-token-value", Roles: roles, Expires: time.Unix(0, 0).UTC()}},
+		StaticTokens: []services.ProvisionToken{
+			services.ProvisionToken{
+				Token:   "static-token-value",
+				Roles:   roles,
+				Expires: time.Unix(0, 0).UTC(),
+			},
+		},
 	})
 	c.Assert(err, IsNil)
 	err = s.a.SetStaticTokens(st)

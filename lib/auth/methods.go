@@ -163,6 +163,14 @@ func (s *AuthServer) authenticateUser(req AuthenticateUserRequest) error {
 // is used to authenticate, returns session associated with the existing session id
 // instead of creating the new one
 func (s *AuthServer) AuthenticateWebUser(req AuthenticateUserRequest) (services.WebSession, error) {
+	clusterConfig, err := s.GetClusterConfig()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	if clusterConfig.GetLocalAuth() == false {
+		return nil, trace.AccessDenied("local auth disabled")
+	}
+
 	if req.Session != nil {
 		session, err := s.GetWebSession(req.Username, req.Session.ID)
 		if err != nil {
@@ -272,6 +280,14 @@ func AuthoritiesToTrustedCerts(authorities []services.CertAuthority) []TrustedCe
 // AuthenticateSSHUser authenticates web user, creates and  returns web session
 // in case if authentication is successful
 func (s *AuthServer) AuthenticateSSHUser(req AuthenticateSSHRequest) (*SSHLoginResponse, error) {
+	clusterConfig, err := s.GetClusterConfig()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	if clusterConfig.GetLocalAuth() == false {
+		return nil, trace.AccessDenied("local auth disabled")
+	}
+
 	if err := s.AuthenticateUser(req.AuthenticateUserRequest); err != nil {
 		return nil, trace.Wrap(err)
 	}
