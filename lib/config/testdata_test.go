@@ -173,3 +173,19 @@ auth_service:
     facets:
     - https://graviton:3080
 `
+
+// configWithFIPSKex is a configuration file with a FIPS compliant KEX
+// algorithm.
+const configWithFIPSKex = `
+teleport:
+  kex_algos:
+    - ecdh-sha2-nistp256
+`
+
+// configWithoutFIPSKex is a configuration file without a FIPS compliant KEX
+// algorithm.
+const configWithoutFIPSKex = `
+teleport:
+  kex_algos:
+    - curve25519-sha256@libssh.org
+`

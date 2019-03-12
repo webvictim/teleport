@@ -168,6 +168,9 @@ type Config struct {
 
 	// Clock is used to control time in tests.
 	Clock clockwork.Clock
+
+	// FIPS means FedRAMP/FIPS 140-2 compliant configuration was requested.
+	FIPS bool
 }
 
 // ApplyToken assigns a given token to all internal services but only if token
@@ -467,4 +470,28 @@ func ApplyDefaults(cfg *Config) {
 	cfg.SSH.Shell = defaults.DefaultShell
 	defaults.ConfigureLimiter(&cfg.SSH.Limiter)
 	cfg.SSH.PAM = &pam.Config{Enabled: false}
+}
+
+// ApplyFIPSDefaults updates default configuration to be FedRAMP/FIPS 140-2
+// compliant.
+func ApplyFIPSDefaults(cfg *Config) {
+	cfg.FIPS = true
+
+	// Update TLS and SSH cryptographic primitives.
+	cfg.CipherSuites = defaults.FIPSCipherSuites
+	cfg.Ciphers = defaults.FIPSCiphers
+	cfg.KEXAlgorithms = defaults.FIPSKEXAlgorithms
+	cfg.MACAlgorithms = defaults.FIPSMACAlgorithms
+
+	// Only SSO based authentication is supported in FIPS mode. The SSO
+	// provider is where any FedRAMP/FIPS 140-2 compliance (like password
+	// complexity) should be enforced.
+	//
+	// Note: Uncomment when #2575 is merged.
+	//
+	//cfg.Auth.ClusterConfig.SetLocalAuth(false)
+
+	// Update cluster configuration to record sessions at node, this way the
+	// entire cluster is FedRAMP/FIPS 140-2 compliant.
+	cfg.Auth.ClusterConfig.SetSessionRecording(services.RecordAtNode)
 }

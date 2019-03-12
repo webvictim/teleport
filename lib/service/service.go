@@ -55,6 +55,7 @@ import (
 	"github.com/gravitational/teleport/lib/events/s3sessions"
 	kubeproxy "github.com/gravitational/teleport/lib/kube/proxy"
 	"github.com/gravitational/teleport/lib/limiter"
+	"github.com/gravitational/teleport/lib/modules"
 	"github.com/gravitational/teleport/lib/multiplexer"
 	"github.com/gravitational/teleport/lib/reversetunnel"
 	"github.com/gravitational/teleport/lib/services"
@@ -476,6 +477,13 @@ func waitAndReload(ctx context.Context, cfg Config, srv Process, newTeleport New
 func NewTeleport(cfg *Config) (*TeleportProcess, error) {
 	// before we do anything reset the SIGINT handler back to the default
 	system.ResetInterruptSignalHandler()
+
+	// If FIPS mode was requested make sure binary is build against BoringCrypto.
+	if cfg.FIPS {
+		if !modules.GetModules().IsBoringBinary() {
+			return nil, trace.BadParameter("binary not compiled against BoringCrypto")
+		}
+	}
 
 	if err := validateConfig(cfg); err != nil {
 		return nil, trace.Wrap(err, "configuration error")
