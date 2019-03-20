@@ -507,9 +507,9 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 		s.handleNewSite(conn, sconn, nch)
 	}
 	switch {
-	case val == teleport.RoleNode:
+	case val == string(teleport.RoleNode):
 		s.handleNewNode(conn, sconn, nch)
-	case val == teleport.RoleProxy:
+	case val == string(teleport.RoleProxy):
 		s.handleNewSite(conn, sconn, nch)
 	default:
 		nch.Reject(ssh.ConnectionFailed, "wooo")
@@ -519,7 +519,7 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn, newChannel ssh.NewChannel) {
 	localCluster, err := s.findLocalCluster(sconn)
 	if err != nil {
-		nch.Reject(ssh.ConnectionFailed, err.Error())
+		newChannel.Reject(ssh.ConnectionFailed, err.Error())
 		return
 	}
 
@@ -545,12 +545,12 @@ func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn, newChannel 
 	//go site.registerHeartbeat(time.Now())
 	//return site, remoteConn, nil
 
-	err := s.upsertNode(conn, sconn)
-	if err != nil {
-		//log.Error(trace.Wrap(err))
-		nch.Reject(ssh.ConnectionFailed, "failed to accept incoming node connection")
-		return
-	}
+	//err := s.upsertNode(conn, sconn)
+	//if err != nil {
+	//	//log.Error(trace.Wrap(err))
+	//	nch.Reject(ssh.ConnectionFailed, "failed to accept incoming node connection")
+	//	return
+	//}
 	//ch, req, err := nch.Accept()
 	//if err != nil {
 	//	//log.Error(trace.Wrap(err))
@@ -571,7 +571,7 @@ func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
 
 	for _, ls := range s.localSites {
 		if ls.domainName == clusterName {
-			return ls
+			return ls, nil
 		}
 	}
 
@@ -831,11 +831,11 @@ func (s *server) getRemoteClusters() []*remoteSite {
 func (s *server) GetSite(name string) (RemoteSite, error) {
 	s.RLock()
 	defer s.RUnlock()
-	for i := range s.remoteSites {
-		if s.remoteSites[i].GetName() == name {
-			return s.remoteSites[i], nil
-		}
-	}
+	//for i := range s.remoteSites {
+	//	if s.remoteSites[i].GetName() == name {
+	//		return s.remoteSites[i], nil
+	//	}
+	//}
 	for i := range s.localSites {
 		if s.localSites[i].GetName() == name {
 			return s.localSites[i], nil

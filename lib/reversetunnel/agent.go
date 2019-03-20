@@ -22,11 +22,16 @@ package reversetunnel
 
 import (
 	"context"
+	//"crypto/rand"
+	//"crypto/rsa"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
@@ -309,9 +314,10 @@ func (a *Agent) connect() (conn *ssh.Client, err error) {
 	return conn, err
 }
 
-func (a *Agent) proxyNodeTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
-	a.Debugf("proxyTransport")
-	defer ch.Close()
+func (a *Agent) proxyNodeTransport(sconn ssh.Conn, ch ssh.Channel, reqC <-chan *ssh.Request) {
+	fmt.Printf("--> IN PROXY NODE TRANSPORT.\n")
+	a.Debugf("proxyNodeTransport")
+	//defer ch.Close()
 
 	// always push space into stderr to make sure the caller can always
 	// safely call read(stderr) without blocking. this stderr is only used
@@ -333,9 +339,116 @@ func (a *Agent) proxyNodeTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 		return
 	}
 
-	//sconn, chans, reqs, err := ssh.NewServerConn()
-	//...
-	//yeah maybe, we can basically use a fake terminal from the go example here.
+	chconn := utils.NewChConn(sconn, ch)
+
+	go func() {
+		config := &ssh.ServerConfig{
+			PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+				return &ssh.Permissions{
+					Extensions: map[string]string{
+						"pubkey-fp": ssh.FingerprintSHA256(pubKey),
+					},
+				}, nil
+			},
+		}
+		privateBytes, err := ioutil.ReadFile("/home/rjones/.ssh/id_rsa")
+		if err != nil {
+			log.Fatal("Failed to load private key: ", err)
+		}
+		private, err := ssh.ParsePrivateKey(privateBytes)
+		if err != nil {
+			log.Fatal("Failed to parse private key: ", err)
+		}
+		config.AddHostKey(private)
+
+		//privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+		//if err != nil {
+		//	fmt.Printf("--> err: %v.\n", err)
+		//	return
+		//}
+		//signer, err := ssh.NewSignerFromKey(privateKey)
+		//if err != nil {
+		//	fmt.Printf("--> err: %v.\n", err)
+		//	return
+		//}
+		//config.AddHostKey(signer)
+
+		fmt.Printf("--> IN AGENT BEFORE HANDHSKAE\n")
+
+		_, chans, reqs, err := ssh.NewServerConn(chconn, config)
+		if err != nil {
+			fmt.Printf("--> 3 err: %v.\n", err)
+			return
+		}
+
+		fmt.Printf("--> HANDSHOOKED\n")
+
+		go ssh.DiscardRequests(reqs)
+
+		// Service the incoming Channel channel.
+		for newChannel := range chans {
+			// Channels have a type, depending on the application level
+			// protocol intended. In the case of a shell, the type is
+			// "session" and ServerShell may be used to present a simple
+			// terminal interface.
+			if newChannel.ChannelType() != "session" {
+				newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+				continue
+			}
+			channel, requests, err := newChannel.Accept()
+			if err != nil {
+				fmt.Printf("--> 4 err: %v.\n", err)
+				return
+			}
+
+			// Sessions have out-of-band requests such as "shell",
+			// "pty-req" and "env".  Here we handle only the
+			// "shell" request.
+			go func(in <-chan *ssh.Request) {
+				for req := range in {
+					req.Reply(req.Type == "shell" || req.Type == "pty-req", nil)
+				}
+			}(requests)
+
+			term := terminal.NewTerminal(channel, "> ")
+
+			go func() {
+				defer channel.Close()
+				for {
+					line, err := term.ReadLine()
+					if err != nil {
+						break
+					}
+					fmt.Println(line)
+				}
+			}()
+		}
+	}()
+
+	// successfully dialed
+	req.Reply(true, []byte("connected"))
+	//a.Debugf("Successfully dialed to %v, start proxying.", server)
+
+	//wg := sync.WaitGroup{}
+	//wg.Add(2)
+
+	//go func() {
+	//	//defer wg.Done()
+	//	// make sure that we close the client connection on a channel
+	//	// close, otherwise the other goroutine would never know
+	//	// as it will block on read from the connection
+	//	//defer conn.Close()
+	//	io.Copy(chconn, ch)
+	//}()
+
+	//go func() {
+	//	//	defer wg.Done()
+	//	io.Copy(ch, chconn)
+	//}()
+
+	time.Sleep(5 * time.Second)
+
+	//wg.Wait()
 
 	//server := string(req.Payload)
 	//var servers []string
@@ -401,24 +514,25 @@ func (a *Agent) proxyNodeTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 	//req.Reply(true, []byte("connected"))
 	//a.Debugf("Successfully dialed to %v, start proxying.", server)
 
-	wg := sync.WaitGroup{}
-	wg.Add(2)
+	//wg := sync.WaitGroup{}
+	//wg.Add(2)
 
-	go func() {
-		defer wg.Done()
-		// make sure that we close the client connection on a channel
-		// close, otherwise the other goroutine would never know
-		// as it will block on read from the connection
-		defer conn.Close()
-		io.Copy(conn, ch)
-	}()
+	//go func() {
+	//	defer wg.Done()
+	//	// make sure that we close the client connection on a channel
+	//	// close, otherwise the other goroutine would never know
+	//	// as it will block on read from the connection
+	//	defer conn.Close()
+	//	io.Copy(conn, ch)
+	//}()
 
-	go func() {
-		defer wg.Done()
-		io.Copy(ch, conn)
-	}()
+	//go func() {
+	//	defer wg.Done()
+	//	io.Copy(ch, conn)
+	//}()
 
-	wg.Wait()
+	//wg.Wait()
+
 }
 
 // proxyTransport runs as a goroutine running inside a reverse tunnel client
@@ -642,6 +756,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 			}
 		// new transport request:
 		case nch := <-newTransportC:
+			fmt.Printf("--> NEW TRANSPORT C\n")
 			if nch == nil {
 				continue
 			}
@@ -654,6 +769,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 			go a.proxyTransport(ch, req)
 		//
 		case nch := <-newNodeTransportCh:
+			fmt.Printf("--> NEW NODE TRANSPORT CH\n")
 			if nch == nil {
 				continue
 			}
@@ -663,7 +779,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 				a.Warningf("failed to accept request: %v", err)
 				continue
 			}
-			go a.proxyNodeTransport(ch, req)
+			go a.proxyNodeTransport(conn.Conn, ch, req)
 		// new discovery request
 		case nch := <-newDiscoveryC:
 			if nch == nil {

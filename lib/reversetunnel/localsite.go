@@ -29,6 +29,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv/forward"
+	"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/teleport/lib/utils/proxy"
 
 	"github.com/gravitational/trace"
@@ -56,6 +57,7 @@ func newlocalSite(srv *server, domainName string, client auth.ClientI) (*localSi
 		accessPoint:      accessPoint,
 		certificateCache: certificateCache,
 		domainName:       domainName,
+		remoteConns:      make(map[string]*remoteConn),
 		log: log.WithFields(log.Fields{
 			trace.Component: teleport.ComponentReverseTunnelServer,
 			trace.ComponentFields: map[string]string{
@@ -140,26 +142,27 @@ func (s *localSite) DialAuthServer() (conn net.Conn, err error) {
 }
 
 func (s *localSite) Dial(params DialParams) (net.Conn, error) {
-	err := params.CheckAndSetDefaults()
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
+	//err := params.CheckAndSetDefaults()
+	//if err != nil {
+	//	return nil, trace.Wrap(err)
+	//}
 
-	clusterConfig, err := s.accessPoint.GetClusterConfig()
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
+	//clusterConfig, err := s.accessPoint.GetClusterConfig()
+	//if err != nil {
+	//	return nil, trace.Wrap(err)
+	//}
 
-	// if the proxy is in recording mode use the agent to dial and build a
-	// in-memory forwarding server
-	if clusterConfig.GetSessionRecording() == services.RecordAtProxy {
-		if params.UserAgent == nil {
-			return nil, trace.BadParameter("user agent missing")
-		}
-		return s.dialWithAgent(params)
-	}
+	//// if the proxy is in recording mode use the agent to dial and build a
+	//// in-memory forwarding server
+	//if clusterConfig.GetSessionRecording() == services.RecordAtProxy {
+	//	if params.UserAgent == nil {
+	//		return nil, trace.BadParameter("user agent missing")
+	//	}
+	//	return s.dialWithAgent(params)
+	//}
 
-	return s.DialTCP(params.From, params.To)
+	//return s.DialTCP(params.From, params.To)
+	return s.chanTransportConn("", "")
 }
 
 func (s *localSite) DialTCP(from net.Addr, to net.Addr) (net.Conn, error) {
@@ -223,7 +226,7 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 func (s *localSite) handleHeartbeat(conn net.Conn, sconn ssh.Conn, newChannel ssh.NewChannel) {
 	s.addConn("foo.example.com", conn, sconn)
 
-	chans, reqs, err := newChannel.Accept()
+	_, reqs, err := newChannel.Accept()
 	if err != nil {
 		//log.Error(trace.Wrap(err))
 		sconn.Close()
@@ -234,7 +237,7 @@ func (s *localSite) handleHeartbeat(conn net.Conn, sconn ssh.Conn, newChannel ss
 		select {
 		case req := <-reqs:
 			if req == nil {
-				s.Infof("cluster agent disconnected")
+				fmt.Printf("--> DISONNECT!>\n")
 			}
 			fmt.Printf("--> PING FROM DIALED BACK!\n")
 
@@ -258,15 +261,15 @@ func (s *localSite) addConn(id string, conn net.Conn, sshConn ssh.Conn) {
 }
 
 func (s *localSite) chanTransportConn(transportType string, addr string) (net.Conn, error) {
-	var stop bool
-
 	remoteConn, ok := s.remoteConns["foo.example.com"]
 	if !ok {
 		return nil, trace.BadParameter("what?")
 	}
 
+	fmt.Printf("--> openning chan!\n")
+
 	var ch ssh.Channel
-	ch, _, err = remoteConn.sshConn.OpenChannel(chanTransport, nil)
+	ch, _, err := remoteConn.sshConn.OpenChannel("teleport-transport-node", nil)
 	if err != nil {
 		remoteConn.markInvalid(err)
 		return nil, trace.Wrap(err)
@@ -276,10 +279,10 @@ func (s *localSite) chanTransportConn(transportType string, addr string) (net.Co
 	// the agent on the other side will create a new TCP/IP connection to
 	// 'addr' on its network and will start proxying that connection over
 	// this SSH channel.
-	var dialed bool
-	dialed, err = ch.SendRequest(transportType, true, []byte(addr))
+	//var dialed bool
+	_, err = ch.SendRequest(transportType, true, []byte(addr))
 	if err != nil {
-		return nil, stop, trace.Wrap(err)
+		return nil, trace.Wrap(err)
 	}
 	//stop = true
 	//if !dialed {
@@ -292,7 +295,7 @@ func (s *localSite) chanTransportConn(transportType string, addr string) (net.Co
 	//	}
 	//	return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
 	//}
-	return utils.NewChConn(remoteConn.sshConn, ch), stop, nil
+	return utils.NewChConn(remoteConn.sshConn, ch), nil
 }
 
 func findServer(addr string, servers []services.Server) (services.Server, error) {
