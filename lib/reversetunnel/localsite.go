@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/defaults"
@@ -85,6 +87,8 @@ type localSite struct {
 
 	// certificateCache caches host certificates for the forwarding server.
 	certificateCache *certificateCache
+
+	remoteConns map[string]*remoteConn
 }
 
 // GetTunnelsCount always returns 1 for local cluster
@@ -214,6 +218,81 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+func (s *localSite) handleHeartbeat(conn net.Conn, sconn ssh.Conn, newChannel ssh.NewChannel) {
+	s.addConn("foo.example.com", conn, sconn)
+
+	chans, reqs, err := newChannel.Accept()
+	if err != nil {
+		//log.Error(trace.Wrap(err))
+		sconn.Close()
+		return
+	}
+
+	for {
+		select {
+		case req := <-reqs:
+			if req == nil {
+				s.Infof("cluster agent disconnected")
+			}
+			fmt.Printf("--> PING FROM DIALED BACK!\n")
+
+			//err := s.accessPoint.UpsertTunnelConnection(connInfo)
+			//if err != nil {
+			//	fmt.Printf("--> what: %v.\n", err)
+			//}
+		}
+	}
+
+}
+
+func (s *localSite) addConn(id string, conn net.Conn, sshConn ssh.Conn) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.remoteConns[id] = &remoteConn{
+		sshConn: sshConn,
+		conn:    conn,
+	}
+}
+
+func (s *localSite) chanTransportConn(transportType string, addr string) (net.Conn, error) {
+	var stop bool
+
+	remoteConn, ok := s.remoteConns["foo.example.com"]
+	if !ok {
+		return nil, trace.BadParameter("what?")
+	}
+
+	var ch ssh.Channel
+	ch, _, err = remoteConn.sshConn.OpenChannel(chanTransport, nil)
+	if err != nil {
+		remoteConn.markInvalid(err)
+		return nil, trace.Wrap(err)
+	}
+
+	// Send a special SSH out-of-band request called "teleport-transport"
+	// the agent on the other side will create a new TCP/IP connection to
+	// 'addr' on its network and will start proxying that connection over
+	// this SSH channel.
+	var dialed bool
+	dialed, err = ch.SendRequest(transportType, true, []byte(addr))
+	if err != nil {
+		return nil, stop, trace.Wrap(err)
+	}
+	//stop = true
+	//if !dialed {
+	//	defer ch.Close()
+	//	// pull the error message from the tunnel client (remote cluster)
+	//	// passed to us via stderr:
+	//	errMessage, _ := ioutil.ReadAll(ch.Stderr())
+	//	if errMessage == nil {
+	//		errMessage = []byte("failed connecting to " + addr)
+	//	}
+	//	return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
+	//}
+	return utils.NewChConn(remoteConn.sshConn, ch), stop, nil
 }
 
 func findServer(addr string, servers []services.Server) (services.Server, error) {

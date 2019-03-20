@@ -1219,10 +1219,10 @@ func (process *TeleportProcess) initSSH() error {
 
 		cfg := process.Config
 
-		limiter, err := limiter.NewLimiter(cfg.SSH.Limiter)
-		if err != nil {
-			return trace.Wrap(err)
-		}
+		//limiter, err := limiter.NewLimiter(cfg.SSH.Limiter)
+		//if err != nil {
+		//	return trace.Wrap(err)
+		//}
 
 		authClient, err := process.newLocalCache(conn.Client, []string{"node"})
 		if err != nil {
@@ -1240,54 +1240,84 @@ func (process *TeleportProcess) initSSH() error {
 			return trace.Wrap(err)
 		}
 
-		listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		// clean up unused descriptors passed for proxy, but not used by it
-		warnOnErr(process.closeImportedDescriptors(teleport.ComponentNode))
-
-		s, err = regular.New(cfg.SSH.Addr,
-			cfg.Hostname,
-			[]ssh.Signer{conn.ServerIdentity.KeySigner},
-			authClient,
-			cfg.DataDir,
-			cfg.AdvertiseIP,
-			process.proxyPublicAddr(),
-			regular.SetLimiter(limiter),
-			regular.SetShell(cfg.SSH.Shell),
-			regular.SetAuditLog(conn.Client),
-			regular.SetSessionServer(conn.Client),
-			regular.SetLabels(cfg.SSH.Labels, cfg.SSH.CmdLabels),
-			regular.SetNamespace(namespace),
-			regular.SetPermitUserEnvironment(cfg.SSH.PermitUserEnvironment),
-			regular.SetCiphers(cfg.Ciphers),
-			regular.SetKEXAlgorithms(cfg.KEXAlgorithms),
-			regular.SetMACAlgorithms(cfg.MACAlgorithms),
-			regular.SetPAMConfig(cfg.SSH.PAM),
-			regular.SetRotationGetter(process.getRotation),
-		)
+		// Keep upserting this with a ttl.
+		reverseTunnel := services.NewReverseTunnel("example.com", []string{
+			"localhost:3024",
+		})
+		reverseTunnel.SetTunnelType(services.NodeTunnel)
+		err = conn.Client.UpsertReverseTunnel(reverseTunnel)
 		if err != nil {
 			return trace.Wrap(err)
 		}
 
-		// init uploader service for recording SSH node, if proxy is not
-		// enabled on this node, because proxy stars uploader service as well
-		if !cfg.Proxy.Enabled {
-			if err := process.initUploaderService(authClient, conn.Client); err != nil {
+		agentPool, err := reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
+			HostUUID:    conn.ServerIdentity.ID.HostUUID,
+			Client:      conn.Client,
+			AccessPoint: authClient,
+			HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
+			Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
+			//KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),
+		})
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		process.RegisterCriticalFunc("proxy.reversetunnel.agent", func() error {
+			if err := agentPool.Start(); err != nil {
 				return trace.Wrap(err)
 			}
-		}
+			agentPool.Wait()
+			return nil
+		})
 
-		log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
-		utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
-		go s.Serve(listener)
+		//listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
+		//if err != nil {
+		//	return trace.Wrap(err)
+		//}
+		//// clean up unused descriptors passed for proxy, but not used by it
+		//warnOnErr(process.closeImportedDescriptors(teleport.ComponentNode))
 
-		// broadcast that the node has started
-		process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+		//s, err = regular.New(cfg.SSH.Addr,
+		//	cfg.Hostname,
+		//	[]ssh.Signer{conn.ServerIdentity.KeySigner},
+		//	authClient,
+		//	cfg.DataDir,
+		//	cfg.AdvertiseIP,
+		//	process.proxyPublicAddr(),
+		//	regular.SetLimiter(limiter),
+		//	regular.SetShell(cfg.SSH.Shell),
+		//	regular.SetAuditLog(conn.Client),
+		//	regular.SetSessionServer(conn.Client),
+		//	regular.SetLabels(cfg.SSH.Labels, cfg.SSH.CmdLabels),
+		//	regular.SetNamespace(namespace),
+		//	regular.SetPermitUserEnvironment(cfg.SSH.PermitUserEnvironment),
+		//	regular.SetCiphers(cfg.Ciphers),
+		//	regular.SetKEXAlgorithms(cfg.KEXAlgorithms),
+		//	regular.SetMACAlgorithms(cfg.MACAlgorithms),
+		//	regular.SetPAMConfig(cfg.SSH.PAM),
+		//	regular.SetRotationGetter(process.getRotation),
+		//)
+		//if err != nil {
+		//	return trace.Wrap(err)
+		//}
 
-		// block and wait while the node is running
-		s.Wait()
+		//// init uploader service for recording SSH node, if proxy is not
+		//// enabled on this node, because proxy stars uploader service as well
+		//if !cfg.Proxy.Enabled {
+		//	if err := process.initUploaderService(authClient, conn.Client); err != nil {
+		//		return trace.Wrap(err)
+		//	}
+		//}
+
+		//log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
+		//utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
+		//go s.Serve(listener)
+
+		//// broadcast that the node has started
+		//process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+
+		//// block and wait while the node is running
+		//s.Wait()
+
 		log.Infof("Exited.")
 		return nil
 	})

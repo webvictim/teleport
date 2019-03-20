@@ -309,6 +309,118 @@ func (a *Agent) connect() (conn *ssh.Client, err error) {
 	return conn, err
 }
 
+func (a *Agent) proxyNodeTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
+	a.Debugf("proxyTransport")
+	defer ch.Close()
+
+	// always push space into stderr to make sure the caller can always
+	// safely call read(stderr) without blocking. this stderr is only used
+	// to request proxying of TCP/IP via reverse tunnel.
+	fmt.Fprint(ch.Stderr(), " ")
+
+	var req *ssh.Request
+	select {
+	case <-a.ctx.Done():
+		a.Infof("is closed, returning")
+		return
+	case req = <-reqC:
+		if req == nil {
+			a.Infof("connection closed, returning")
+			return
+		}
+	case <-time.After(defaults.DefaultDialTimeout):
+		a.Warningf("timeout waiting for dial")
+		return
+	}
+
+	//sconn, chans, reqs, err := ssh.NewServerConn()
+	//...
+	//yeah maybe, we can basically use a fake terminal from the go example here.
+
+	//server := string(req.Payload)
+	//var servers []string
+
+	//// if the request is for the special string @remote-auth-server, then get the
+	//// list of auth servers and return that. otherwise try and connect to the
+	//// passed in server.
+	//switch server {
+	//case RemoteAuthServer:
+	//	authServers, err := a.Client.GetAuthServers()
+	//	if err != nil {
+	//		a.Warningf("Unable retrieve list of remote Auth Servers: %v.", err)
+	//		return
+	//	}
+	//	if len(authServers) == 0 {
+	//		a.Warningf("No remote Auth Servers returned by client.")
+	//		return
+	//	}
+	//	for _, as := range authServers {
+	//		servers = append(servers, as.GetAddr())
+	//	}
+	//case RemoteKubeProxy:
+	//	// kubernetes is not configured, reject the connection
+	//	if a.KubeDialAddr.IsEmpty() {
+	//		req.Reply(false, []byte("connection rejected: configure kubernetes proxy for this cluster."))
+	//		return
+	//	}
+	//	servers = append(servers, a.KubeDialAddr.Addr)
+	//default:
+	//	servers = append(servers, server)
+	//}
+
+	//a.Debugf("Received out-of-band proxy transport request: %v", servers)
+
+	//var conn net.Conn
+	//var err error
+
+	//// loop over all servers and try and connect to one of them
+	//for _, s := range servers {
+	//	conn, err = net.Dial("tcp", s)
+	//	if err == nil {
+	//		break
+	//	}
+
+	//	// log the reason we were not able to connect
+	//	a.Debugf(trace.DebugReport(err))
+	//}
+
+	//// if we were not able to connect to any server, write the last connection
+	//// error to stderr of the caller (via SSH channel) so the error will be
+	//// propagated all the way back to the client (most likely tsh)
+	//if err != nil {
+	//	fmt.Fprint(ch.Stderr(), err.Error())
+	//	req.Reply(false, []byte(err.Error()))
+	//	return
+	//}
+
+	//if conn == nil {
+	//	a.Warningf("No error, but conn is nil: %v", conn)
+	//}
+
+	//// successfully dialed
+	//req.Reply(true, []byte("connected"))
+	//a.Debugf("Successfully dialed to %v, start proxying.", server)
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		// make sure that we close the client connection on a channel
+		// close, otherwise the other goroutine would never know
+		// as it will block on read from the connection
+		defer conn.Close()
+		io.Copy(conn, ch)
+	}()
+
+	go func() {
+		defer wg.Done()
+		io.Copy(ch, conn)
+	}()
+
+	wg.Wait()
+}
+
 // proxyTransport runs as a goroutine running inside a reverse tunnel client
 // and it establishes and maintains the following remote connection:
 //
@@ -504,6 +616,8 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 	newTransportC := conn.HandleChannelOpen(chanTransport)
 	newDiscoveryC := conn.HandleChannelOpen(chanDiscovery)
 
+	newNodeTransportCh := conn.HandleChannelOpen("teleport-transport-node")
+
 	// send first ping right away, then start a ping timer:
 	hb.SendRequest("ping", false, nil)
 
@@ -538,6 +652,18 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 				continue
 			}
 			go a.proxyTransport(ch, req)
+		//
+		case nch := <-newNodeTransportCh:
+			if nch == nil {
+				continue
+			}
+			a.Debugf("Node transport request: %v", nch.ChannelType())
+			ch, req, err := nch.Accept()
+			if err != nil {
+				a.Warningf("failed to accept request: %v", err)
+				continue
+			}
+			go a.proxyNodeTransport(ch, req)
 		// new discovery request
 		case nch := <-newDiscoveryC:
 			if nch == nil {

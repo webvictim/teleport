@@ -87,7 +87,7 @@ type server struct {
 	srv     *sshutils.Server
 	limiter *limiter.Limiter
 
-	// remoteSites is the list of conencted remote clusters
+	// remoteSites is the list of connected remote clusters
 	remoteSites []*remoteSite
 
 	// localSites is the list of local (our own cluster) tunnel clients,
@@ -501,6 +501,84 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 		nch.Reject(ssh.ConnectionFailed, msg)
 		return
 	}
+
+	val, ok := sconn.Permissions.Extensions["role"]
+	if !ok {
+		s.handleNewSite(conn, sconn, nch)
+	}
+	switch {
+	case val == teleport.RoleNode:
+		s.handleNewNode(conn, sconn, nch)
+	case val == teleport.RoleProxy:
+		s.handleNewSite(conn, sconn, nch)
+	default:
+		nch.Reject(ssh.ConnectionFailed, "wooo")
+	}
+}
+
+func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn, newChannel ssh.NewChannel) {
+	localCluster, err := s.findLocalCluster(sconn)
+	if err != nil {
+		nch.Reject(ssh.ConnectionFailed, err.Error())
+		return
+	}
+
+	go localCluster.handleHeartbeat(conn, sconn, newChannel)
+
+	//ch, req, err := nch.Accept()
+	//if err != nil {
+	//	//log.Error(trace.Wrap(err))
+	//	sconn.Close()
+	//	return
+	//}
+
+	//go site.handleHeartbeat(remoteConn, ch, req)
+
+	//if remoteConn, err = site.addConn(conn, sshConn); err != nil {
+	//	return nil, nil, trace.Wrap(err)
+	//}
+
+	//site.Infof("Connection <- %v, clusters: %d.", conn.RemoteAddr(), len(s.remoteSites))
+	//// treat first connection as a registered heartbeat,
+	//// otherwise the connection information will appear after initial
+	//// heartbeat delay
+	//go site.registerHeartbeat(time.Now())
+	//return site, remoteConn, nil
+
+	err := s.upsertNode(conn, sconn)
+	if err != nil {
+		//log.Error(trace.Wrap(err))
+		nch.Reject(ssh.ConnectionFailed, "failed to accept incoming node connection")
+		return
+	}
+	//ch, req, err := nch.Accept()
+	//if err != nil {
+	//	//log.Error(trace.Wrap(err))
+	//	sconn.Close()
+	//	return
+	//}
+
+	//go site.handleHeartbeat(remoteConn, ch, req)
+
+}
+
+func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
+	// Cluster name was extracted from certificate and packed into extensions.
+	clusterName := sconn.Permissions.Extensions[extAuthority]
+	if strings.TrimSpace(clusterName) == "" {
+		return nil, trace.BadParameter("empty cluster name")
+	}
+
+	for _, ls := range s.localSites {
+		if ls.domainName == clusterName {
+			return ls
+		}
+	}
+
+	return nil, trace.BadParameter("local cluster %v not found", clusterName)
+}
+
+func (s *server) handleNewSite(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
 	s.Debugf("new tunnel from %s", sconn.RemoteAddr())
 	if sconn.Permissions.Extensions[extCertType] != extCertTypeHost {
 		s.Error(trace.BadParameter("can't retrieve certificate type in certType"))
@@ -609,26 +687,27 @@ func (s *server) keyAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 				extHost:      conn.User(),
 				extCertType:  extCertTypeHost,
 				extAuthority: authDomain,
+				"role":       cert.Extensions["x-teleport-role"],
 			},
 		}, nil
-	case ssh.UserCert:
-		_, err := s.userCertChecker.Authenticate(conn, key)
-		if err != nil {
-			logger.Warningf("Failed to authenticate user, err: %v.", err)
-			return nil, err
-		}
+	//case ssh.UserCert:
+	//	_, err := s.userCertChecker.Authenticate(conn, key)
+	//	if err != nil {
+	//		logger.Warningf("Failed to authenticate user, err: %v.", err)
+	//		return nil, err
+	//	}
 
-		if err := s.userCertChecker.CheckCert(conn.User(), cert); err != nil {
-			logger.Warningf("Failed to authenticate user err: %v.", err)
-			return nil, trace.Wrap(err)
-		}
+	//	if err := s.userCertChecker.CheckCert(conn.User(), cert); err != nil {
+	//		logger.Warningf("Failed to authenticate user err: %v.", err)
+	//		return nil, trace.Wrap(err)
+	//	}
 
-		return &ssh.Permissions{
-			Extensions: map[string]string{
-				extHost:     conn.User(),
-				extCertType: extCertTypeUser,
-			},
-		}, nil
+	//	return &ssh.Permissions{
+	//		Extensions: map[string]string{
+	//			extHost:     conn.User(),
+	//			extCertType: extCertTypeUser,
+	//		},
+	//	}, nil
 	default:
 		return nil, trace.BadParameter("unsupported cert type: %v", cert.CertType)
 	}
