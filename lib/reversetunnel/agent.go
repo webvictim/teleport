@@ -26,12 +26,12 @@ import (
 	//"crypto/rsa"
 	"fmt"
 	"io"
-	"io/ioutil"
+	//"io/ioutil"
 	"net"
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/ssh/terminal"
+	//"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
@@ -92,6 +92,8 @@ type AgentConfig struct {
 	EventsC chan string
 	// KubeDialAddr is a dial address for kubernetes proxy
 	KubeDialAddr utils.NetAddr
+	//
+	CH ConnHandler
 }
 
 // CheckAndSetDefaults checks parameters and sets default values
@@ -339,94 +341,98 @@ func (a *Agent) proxyNodeTransport(sconn ssh.Conn, ch ssh.Channel, reqC <-chan *
 		return
 	}
 
+	req.Reply(true, []byte("connected"))
 	chconn := utils.NewChConn(sconn, ch)
 
-	go func() {
-		config := &ssh.ServerConfig{
-			PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-				return &ssh.Permissions{
-					Extensions: map[string]string{
-						"pubkey-fp": ssh.FingerprintSHA256(pubKey),
-					},
-				}, nil
-			},
-		}
-		privateBytes, err := ioutil.ReadFile("/home/rjones/.ssh/id_rsa")
-		if err != nil {
-			log.Fatal("Failed to load private key: ", err)
-		}
-		private, err := ssh.ParsePrivateKey(privateBytes)
-		if err != nil {
-			log.Fatal("Failed to parse private key: ", err)
-		}
-		config.AddHostKey(private)
+	//go func() {
+	a.AgentConfig.CH.HandleConnection(chconn)
+	//}()
+	//go func() {
+	//	config := &ssh.ServerConfig{
+	//		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+	//			return &ssh.Permissions{
+	//				Extensions: map[string]string{
+	//					"pubkey-fp": ssh.FingerprintSHA256(pubKey),
+	//				},
+	//			}, nil
+	//		},
+	//	}
+	//	privateBytes, err := ioutil.ReadFile("/home/rjones/.ssh/id_rsa")
+	//	if err != nil {
+	//		log.Fatal("Failed to load private key: ", err)
+	//	}
+	//	private, err := ssh.ParsePrivateKey(privateBytes)
+	//	if err != nil {
+	//		log.Fatal("Failed to parse private key: ", err)
+	//	}
+	//	config.AddHostKey(private)
 
-		//privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
-		//if err != nil {
-		//	fmt.Printf("--> err: %v.\n", err)
-		//	return
-		//}
-		//signer, err := ssh.NewSignerFromKey(privateKey)
-		//if err != nil {
-		//	fmt.Printf("--> err: %v.\n", err)
-		//	return
-		//}
-		//config.AddHostKey(signer)
+	//	//privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	//	//if err != nil {
+	//	//	fmt.Printf("--> err: %v.\n", err)
+	//	//	return
+	//	//}
+	//	//signer, err := ssh.NewSignerFromKey(privateKey)
+	//	//if err != nil {
+	//	//	fmt.Printf("--> err: %v.\n", err)
+	//	//	return
+	//	//}
+	//	//config.AddHostKey(signer)
 
-		fmt.Printf("--> IN AGENT BEFORE HANDHSKAE\n")
+	//	fmt.Printf("--> IN AGENT BEFORE HANDHSKAE\n")
 
-		_, chans, reqs, err := ssh.NewServerConn(chconn, config)
-		if err != nil {
-			fmt.Printf("--> 3 err: %v.\n", err)
-			return
-		}
+	//	_, chans, reqs, err := ssh.NewServerConn(chconn, config)
+	//	if err != nil {
+	//		fmt.Printf("--> 3 err: %v.\n", err)
+	//		return
+	//	}
 
-		fmt.Printf("--> HANDSHOOKED\n")
+	//	fmt.Printf("--> HANDSHOOKED\n")
 
-		go ssh.DiscardRequests(reqs)
+	//	go ssh.DiscardRequests(reqs)
 
-		// Service the incoming Channel channel.
-		for newChannel := range chans {
-			// Channels have a type, depending on the application level
-			// protocol intended. In the case of a shell, the type is
-			// "session" and ServerShell may be used to present a simple
-			// terminal interface.
-			if newChannel.ChannelType() != "session" {
-				newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-				continue
-			}
-			channel, requests, err := newChannel.Accept()
-			if err != nil {
-				fmt.Printf("--> 4 err: %v.\n", err)
-				return
-			}
+	//	// Service the incoming Channel channel.
+	//	for newChannel := range chans {
+	//		// Channels have a type, depending on the application level
+	//		// protocol intended. In the case of a shell, the type is
+	//		// "session" and ServerShell may be used to present a simple
+	//		// terminal interface.
+	//		if newChannel.ChannelType() != "session" {
+	//			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+	//			continue
+	//		}
+	//		channel, requests, err := newChannel.Accept()
+	//		if err != nil {
+	//			fmt.Printf("--> 4 err: %v.\n", err)
+	//			return
+	//		}
 
-			// Sessions have out-of-band requests such as "shell",
-			// "pty-req" and "env".  Here we handle only the
-			// "shell" request.
-			go func(in <-chan *ssh.Request) {
-				for req := range in {
-					req.Reply(req.Type == "shell" || req.Type == "pty-req", nil)
-				}
-			}(requests)
+	//		// Sessions have out-of-band requests such as "shell",
+	//		// "pty-req" and "env".  Here we handle only the
+	//		// "shell" request.
+	//		go func(in <-chan *ssh.Request) {
+	//			for req := range in {
+	//				req.Reply(req.Type == "shell" || req.Type == "pty-req", nil)
+	//			}
+	//		}(requests)
 
-			term := terminal.NewTerminal(channel, "> ")
+	//		term := terminal.NewTerminal(channel, "> ")
 
-			go func() {
-				defer channel.Close()
-				for {
-					line, err := term.ReadLine()
-					if err != nil {
-						break
-					}
-					fmt.Println(line)
-				}
-			}()
-		}
-	}()
+	//		go func() {
+	//			defer channel.Close()
+	//			for {
+	//				line, err := term.ReadLine()
+	//				if err != nil {
+	//					break
+	//				}
+	//				fmt.Println(line)
+	//			}
+	//		}()
+	//	}
+	//}()
 
 	// successfully dialed
-	req.Reply(true, []byte("connected"))
+	//req.Reply(true, []byte("connected"))
 	//a.Debugf("Successfully dialed to %v, start proxying.", server)
 
 	//wg := sync.WaitGroup{}
@@ -446,7 +452,7 @@ func (a *Agent) proxyNodeTransport(sconn ssh.Conn, ch ssh.Channel, reqC <-chan *
 	//	io.Copy(ch, chconn)
 	//}()
 
-	time.Sleep(5 * time.Second)
+	//time.Sleep(5 * time.Second)
 
 	//wg.Wait()
 
