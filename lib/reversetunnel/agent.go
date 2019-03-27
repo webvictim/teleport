@@ -731,6 +731,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 
 	hb, reqC, err := conn.OpenChannel(chanHeartbeat, nil)
 	if err != nil {
+		fmt.Printf("--> here\n")
 		return trace.Wrap(err)
 	}
 	newTransportC := conn.HandleChannelOpen(chanTransport)

@@ -21,7 +21,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"net/http"
+	//"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -507,6 +507,7 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	if !ok {
 		s.handleNewSite(conn, sconn, nch)
 	}
+	fmt.Printf("--> sconn.Permissions.Extensions[role]: %v.\n", val)
 	switch {
 	case val == string(teleport.RoleNode):
 		s.handleNewNode(conn, sconn, nch)
@@ -783,11 +784,11 @@ func (s *server) upsertSite(conn net.Conn, sshConn *ssh.ServerConn) (*remoteSite
 		}
 		s.remoteSites = append(s.remoteSites, site)
 	}
-	site.Infof("Connection <- %v, clusters: %d.", conn.RemoteAddr(), len(s.remoteSites))
+	site.log.Infof("Connection <- %v, clusters: %d.", conn.RemoteAddr(), len(s.remoteSites))
 	// treat first connection as a registered heartbeat,
 	// otherwise the connection information will appear after initial
 	// heartbeat delay
-	go site.registerHeartbeat(time.Now())
+	go site.discovery.registerHeartbeat(time.Now())
 	return site, remoteConn, nil
 }
 
@@ -869,10 +870,10 @@ func (s *server) RemoveSite(domainName string) error {
 }
 
 type remoteConn struct {
-	sshConn      ssh.Conn
-	conn         net.Conn
-	invalid      int32
-	log          *log.Entry
+	sshConn ssh.Conn
+	conn    net.Conn
+	invalid int32
+	//log          *log.Entry
 	counter      int32
 	discoveryC   ssh.Channel
 	discoveryErr error
@@ -921,6 +922,8 @@ func (rc *remoteConn) isInvalid() bool {
 
 // newRemoteSite helper creates and initializes 'remoteSite' instance
 func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
+	closeContext, cancel := context.WithCancel(srv.ctx)
+
 	connInfo, err := services.NewTunnelConnection(
 		fmt.Sprintf("%v-%v", srv.ID, domainName),
 		services.TunnelConnectionSpecV2{
@@ -933,26 +936,39 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 		return nil, trace.Wrap(err)
 	}
 
-	closeContext, cancel := context.WithCancel(srv.ctx)
+	discovery, err := newDiscoveryServer(&discoveryConfig{
+		AccessPoint:  srv.localAccessPoint,
+		Clock:        srv.Clock,
+		CloseContext: closeContext,
+		RemoteDomain: domainName,
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	discovery.connInfo = connInfo
+	discovery.Start()
+
 	remoteSite := &remoteSite{
-		srv:        srv,
-		domainName: domainName,
-		connInfo:   connInfo,
-		Entry: log.WithFields(log.Fields{
+		log: log.WithFields(log.Fields{
 			trace.Component: teleport.ComponentReverseTunnelServer,
 			trace.ComponentFields: log.Fields{
 				"cluster": domainName,
 			},
 		}),
-		ctx:    closeContext,
-		cancel: cancel,
-		clock:  srv.Clock,
+		srv:        srv,
+		domainName: domainName,
+		//connInfo:   connInfo,
+		discovery: discovery,
+		ctx:       closeContext,
+		cancel:    cancel,
+		clock:     srv.Clock,
 	}
 
-	// transport uses connection do dial out to the remote address
-	remoteSite.transport = &http.Transport{
-		Dial: remoteSite.dialAccessPoint,
-	}
+	// not used??
+	//// transport uses connection do dial out to the remote address
+	//remoteSite.transport = &http.Transport{
+	//	Dial: remoteSite.dialAccessPoint,
+	//}
 
 	// configure access to the full Auth Server API and the cached subset for
 	// the local cluster within which reversetunnel.Server is running.
@@ -983,7 +999,7 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	}
 	remoteSite.certificateCache = certificateCache
 
-	go remoteSite.periodicSendDiscoveryRequests()
+	//go remoteSite.periodicSendDiscoveryRequests()
 	go remoteSite.periodicUpdateCertAuthorities()
 
 	return remoteSite, nil
