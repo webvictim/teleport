@@ -169,6 +169,7 @@ type Config struct {
 
 	// DataDir is a local server data directory
 	DataDir string
+
 	// PollingPeriod specifies polling period for internal sync
 	// goroutines, used to speed up sync-ups in tests.
 	PollingPeriod time.Duration

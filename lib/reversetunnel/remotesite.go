@@ -39,27 +39,31 @@ import (
 	oxyforward "github.com/gravitational/oxy/forward"
 	"github.com/gravitational/roundtrip"
 	"github.com/jonboulle/clockwork"
-	log "github.com/sirupsen/logrus"
 )
 
 // remoteSite is a remote site that established the inbound connecton to
 // the local reverse tunnel server, and now it can provide access to the
 // cluster behind it.
 type remoteSite struct {
-	sync.RWMutex
+	mu sync.RWMutex
 
-	*log.Entry
-	domainName  string
-	connections []*remoteConn
-	lastUsed    int
-	srv         *server
-	transport   *http.Transport
-	connInfo    services.TunnelConnection
+	domainName string
+	//connections []*remoteConn
+	//lastUsed    int
+	srv *server
+
+	// remove, not used.
+	//transport *http.Transport
+
+	//connInfo  services.TunnelConnection
+
 	// lastConnInfo is the last conn
-	lastConnInfo services.TunnelConnection
-	ctx          context.Context
-	cancel       context.CancelFunc
-	clock        clockwork.Clock
+	//lastConnInfo services.TunnelConnection
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	clock clockwork.Clock
 
 	// certificateCache caches host certificates for the forwarding server.
 	certificateCache *certificateCache
@@ -82,6 +86,9 @@ type remoteSite struct {
 	// state has been changed, the tunnel will reconnect to re-create the client
 	// with new settings.
 	remoteCA services.CertAuthority
+
+	// discovery
+	discovery *discoveryServer
 }
 
 func (s *remoteSite) getRemoteClient() (auth.ClientI, bool, error) {
@@ -141,177 +148,196 @@ func (s *remoteSite) String() string {
 	return fmt.Sprintf("remoteSite(%v)", s.domainName)
 }
 
-func (s *remoteSite) connectionCount() int {
-	s.RLock()
-	defer s.RUnlock()
-	return len(s.connections)
-}
+//func (s *remoteSite) connectionCount() int {
+//	s.RLock()
+//	defer s.RUnlock()
+//	return len(s.connections)
+//}
+//
+//func (s *remoteSite) hasValidConnections() bool {
+//	s.RLock()
+//	defer s.RUnlock()
+//
+//	for _, conn := range s.connections {
+//		if !conn.isInvalid() {
+//			return true
+//		}
+//	}
+//	return false
+//}
 
-func (s *remoteSite) hasValidConnections() bool {
-	s.RLock()
-	defer s.RUnlock()
-
-	for _, conn := range s.connections {
-		if !conn.isInvalid() {
-			return true
-		}
-	}
-	return false
-}
-
-// Clos closes remote cluster connections
+// Close closes remote cluster connections.
 func (s *remoteSite) Close() error {
-	s.Lock()
-	defer s.Unlock()
-
+	// Notify anyone waiting that the server is closing.
 	s.cancel()
-	for i := range s.connections {
-		s.connections[i].Close()
+
+	// Close all connections open in the discovery server.
+	err = s.discovery.Close()
+	if err != nil {
+		return trace.Wrap(err)
 	}
-	s.connections = []*remoteConn{}
+
 	return nil
 }
 
-func (s *remoteSite) nextConn() (*remoteConn, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	for {
-		if len(s.connections) == 0 {
-			return nil, trace.NotFound("no active tunnels to cluster %v", s.GetName())
-		}
-		s.lastUsed = (s.lastUsed + 1) % len(s.connections)
-		remoteConn := s.connections[s.lastUsed]
-		if !remoteConn.isInvalid() {
-			return remoteConn, nil
-		}
-		s.connections = append(s.connections[:s.lastUsed], s.connections[s.lastUsed+1:]...)
-		s.lastUsed = 0
-		go remoteConn.Close()
-	}
-}
+//// GetConn returns a connection to the remote proxy. Uses round robin
+//// algorithm to loop over all connections.
+//func (s *remoteSite) GetConn() (*remoteConn, error) {
+//	s.Lock()
+//	defer s.Unlock()
+//
+//	for {
+//		if len(s.connections) == 0 {
+//			return nil, trace.NotFound("no active tunnels to cluster %v", s.GetName())
+//		}
+//
+//		// Get next connection to server and loop around upon hitting the end.
+//		s.lastUsed = (s.lastUsed + 1) % len(s.connections)
+//		remoteConn := s.connections[s.lastUsed]
+//
+//		// If the connective is valid (no errors have occured while sending data
+//		// on it), return it right away.
+//		if !remoteConn.isInvalid() {
+//			return remoteConn, nil
+//		}
+//
+//		// If the connection is invalid (errors have occured while attempting to
+//		// send data on it), remove it from the list of connections.
+//		s.connections = append(s.connections[:s.lastUsed], s.connections[s.lastUsed+1:]...)
+//		s.lastUsed = 0
+//
+//		go remoteConn.Close()
+//	}
+//}
 
 // addConn helper adds a new active remote cluster connection to the list
 // of such connections
-func (s *remoteSite) addConn(conn net.Conn, sshConn ssh.Conn) (*remoteConn, error) {
-	rc := &remoteConn{
-		sshConn: sshConn,
-		conn:    conn,
-		log:     s.Entry,
-	}
-
-	s.Lock()
-	defer s.Unlock()
-
-	s.connections = append(s.connections, rc)
-	s.lastUsed = 0
-	return rc, nil
-}
-
-func (s *remoteSite) GetStatus() string {
-	connInfo, err := s.getLastConnInfo()
+func (s *remoteSite) addConn(conn net.Conn, sconn ssh.Conn) (*remoteConn, error) {
+	err := s.discovery.addConn(conn, sconn)
 	if err != nil {
-		return teleport.RemoteClusterStatusOffline
+		return nil, trace.Wrap(err)
 	}
-	return services.TunnelConnectionStatus(s.clock, connInfo)
+
+	return nil
+
+	//rc := &remoteConn{
+	//	sshConn: sshConn,
+	//	conn:    conn,
+	//	log:     s.Entry,
+	//}
+
+	//s.Lock()
+	//defer s.Unlock()
+
+	//s.connections = append(s.connections, rc)
+	//s.lastUsed = 0
+	//return rc, nil
 }
 
-func (s *remoteSite) copyConnInfo() services.TunnelConnection {
-	s.RLock()
-	defer s.RUnlock()
-	return s.connInfo.Clone()
-}
-
-func (s *remoteSite) setLastConnInfo(connInfo services.TunnelConnection) {
-	s.Lock()
-	defer s.Unlock()
-	s.lastConnInfo = connInfo.Clone()
-}
-
-func (s *remoteSite) getLastConnInfo() (services.TunnelConnection, error) {
-	s.RLock()
-	defer s.RUnlock()
-	if s.lastConnInfo == nil {
-		return nil, trace.NotFound("no last connection found")
-	}
-	return s.lastConnInfo.Clone(), nil
-}
-
-func (s *remoteSite) registerHeartbeat(t time.Time) {
-	connInfo := s.copyConnInfo()
-	connInfo.SetLastHeartbeat(t)
-	connInfo.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
-	s.setLastConnInfo(connInfo)
-	err := s.localAccessPoint.UpsertTunnelConnection(connInfo)
-	if err != nil {
-		s.Warningf("failed to register heartbeat: %v", err)
-	}
-}
-
-// deleteConnectionRecord deletes connection record to let know peer proxies
-// that this node lost the connection and needs to be discovered
-func (s *remoteSite) deleteConnectionRecord() {
-	s.localAccessPoint.DeleteTunnelConnection(s.connInfo.GetClusterName(), s.connInfo.GetName())
-}
-
-// handleHearbeat receives heartbeat messages from the connected agent
-// if the agent has missed several heartbeats in a row, Proxy marks
-// the connection as invalid.
-func (s *remoteSite) handleHeartbeat(conn *remoteConn, ch ssh.Channel, reqC <-chan *ssh.Request) {
-	defer func() {
-		s.Infof("cluster connection closed")
-		conn.Close()
-	}()
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.Infof("closing")
-			return
-		case req := <-reqC:
-			if req == nil {
-				s.Infof("cluster agent disconnected")
-				conn.markInvalid(trace.ConnectionProblem(nil, "agent disconnected"))
-				if !s.hasValidConnections() {
-					s.Debugf("deleting connection record")
-					s.deleteConnectionRecord()
-				}
-				return
-			}
-			var timeSent time.Time
-			var roundtrip time.Duration
-			if req.Payload != nil {
-				if err := timeSent.UnmarshalText(req.Payload); err == nil {
-					roundtrip = s.srv.Clock.Now().Sub(timeSent)
-				}
-			}
-			if roundtrip != 0 {
-				s.WithFields(log.Fields{"latency": roundtrip}).Debugf("ping <- %v", conn.conn.RemoteAddr())
-			} else {
-				s.Debugf("ping <- %v", conn.conn.RemoteAddr())
-			}
-			go s.registerHeartbeat(time.Now())
-		// since we block on select, time.After is re-created everytime we process a request.
-		case <-time.After(defaults.ReverseTunnelOfflineThreshold):
-			conn.markInvalid(trace.ConnectionProblem(nil, "no heartbeats for %v", defaults.ReverseTunnelOfflineThreshold))
-		}
-	}
-}
+//func (s *remoteSite) GetStatus() string {
+//	connInfo, err := s.getLastConnInfo()
+//	if err != nil {
+//		return teleport.RemoteClusterStatusOffline
+//	}
+//	return services.TunnelConnectionStatus(s.clock, connInfo)
+//}
+//
+//func (s *remoteSite) copyConnInfo() services.TunnelConnection {
+//	s.RLock()
+//	defer s.RUnlock()
+//	return s.connInfo.Clone()
+//}
+//
+//func (s *remoteSite) setLastConnInfo(connInfo services.TunnelConnection) {
+//	s.Lock()
+//	defer s.Unlock()
+//	s.lastConnInfo = connInfo.Clone()
+//}
+//
+//func (s *remoteSite) getLastConnInfo() (services.TunnelConnection, error) {
+//	s.RLock()
+//	defer s.RUnlock()
+//	if s.lastConnInfo == nil {
+//		return nil, trace.NotFound("no last connection found")
+//	}
+//	return s.lastConnInfo.Clone(), nil
+//}
+//
+//func (s *remoteSite) registerHeartbeat(t time.Time) {
+//	connInfo := s.copyConnInfo()
+//	connInfo.SetLastHeartbeat(t)
+//	connInfo.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
+//	s.setLastConnInfo(connInfo)
+//	err := s.localAccessPoint.UpsertTunnelConnection(connInfo)
+//	if err != nil {
+//		s.Warningf("failed to register heartbeat: %v", err)
+//	}
+//}
+//
+//// deleteConnectionRecord deletes connection record to let know peer proxies
+//// that this node lost the connection and needs to be discovered
+//func (s *remoteSite) deleteConnectionRecord() {
+//	s.localAccessPoint.DeleteTunnelConnection(s.connInfo.GetClusterName(), s.connInfo.GetName())
+//}
+//
+//// handleHearbeat receives heartbeat messages from the connected agent
+//// if the agent has missed several heartbeats in a row, Proxy marks
+//// the connection as invalid.
+//func (s *remoteSite) handleHeartbeat(conn *remoteConn, ch ssh.Channel, reqC <-chan *ssh.Request) {
+//	defer func() {
+//		s.Infof("cluster connection closed")
+//		conn.Close()
+//	}()
+//	for {
+//		select {
+//		case <-s.ctx.Done():
+//			s.Infof("closing")
+//			return
+//		case req := <-reqC:
+//			if req == nil {
+//				s.Infof("cluster agent disconnected")
+//				conn.markInvalid(trace.ConnectionProblem(nil, "agent disconnected"))
+//				if !s.hasValidConnections() {
+//					s.Debugf("deleting connection record")
+//					s.deleteConnectionRecord()
+//				}
+//				return
+//			}
+//			var timeSent time.Time
+//			var roundtrip time.Duration
+//			if req.Payload != nil {
+//				if err := timeSent.UnmarshalText(req.Payload); err == nil {
+//					roundtrip = s.srv.Clock.Now().Sub(timeSent)
+//				}
+//			}
+//			if roundtrip != 0 {
+//				s.WithFields(log.Fields{"latency": roundtrip}).Debugf("ping <- %v", conn.conn.RemoteAddr())
+//			} else {
+//				s.Debugf("ping <- %v", conn.conn.RemoteAddr())
+//			}
+//			go s.registerHeartbeat(time.Now())
+//		// since we block on select, time.After is re-created everytime we process a request.
+//		case <-time.After(defaults.ReverseTunnelOfflineThreshold):
+//			conn.markInvalid(trace.ConnectionProblem(nil, "no heartbeats for %v", defaults.ReverseTunnelOfflineThreshold))
+//		}
+//	}
+//}
 
 func (s *remoteSite) GetName() string {
 	return s.domainName
 }
 
-func (s *remoteSite) GetLastConnected() time.Time {
-	connInfo, err := s.getLastConnInfo()
-	if err != nil {
-		return time.Time{}
-	}
-	return connInfo.GetLastHeartbeat()
-}
+//func (s *remoteSite) GetLastConnected() time.Time {
+//	connInfo, err := s.getLastConnInfo()
+//	if err != nil {
+//		return time.Time{}
+//	}
+//	return connInfo.GetLastHeartbeat()
+//}
 
 func (s *remoteSite) compareAndSwapCertAuthority(ca services.CertAuthority) error {
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if s.remoteCA == nil {
 		s.remoteCA = ca
@@ -327,25 +353,25 @@ func (s *remoteSite) compareAndSwapCertAuthority(ca services.CertAuthority) erro
 	return trace.CompareFailed("remote certificate authority rotation has been updated")
 }
 
-func (s *remoteSite) periodicSendDiscoveryRequests() {
-	ticker := time.NewTicker(defaults.ReverseTunnelAgentHeartbeatPeriod)
-	defer ticker.Stop()
-	if err := s.sendDiscoveryRequest(); err != nil {
-		s.Warningf("failed to send discovery: %v", err)
-	}
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.Debugf("closing")
-			return
-		case <-ticker.C:
-			err := s.sendDiscoveryRequest()
-			if err != nil {
-				s.Warningf("could not send discovery request: %v", trace.DebugReport(err))
-			}
-		}
-	}
-}
+//func (s *remoteSite) periodicSendDiscoveryRequests() {
+//	ticker := time.NewTicker(defaults.ReverseTunnelAgentHeartbeatPeriod)
+//	defer ticker.Stop()
+//	if err := s.sendDiscoveryRequest(); err != nil {
+//		s.Warningf("failed to send discovery: %v", err)
+//	}
+//	for {
+//		select {
+//		case <-s.ctx.Done():
+//			s.Debugf("closing")
+//			return
+//		case <-ticker.C:
+//			err := s.sendDiscoveryRequest()
+//			if err != nil {
+//				s.Warningf("could not send discovery request: %v", trace.DebugReport(err))
+//			}
+//		}
+//	}
+//}
 
 // updateCertAuthorities updates local and remote cert authorities
 func (s *remoteSite) updateCertAuthorities() error {
@@ -430,130 +456,138 @@ func (s *remoteSite) periodicUpdateCertAuthorities() {
 	}
 }
 
-func (s *remoteSite) isOnline(conn services.TunnelConnection) bool {
-	return services.TunnelConnectionStatus(s.clock, conn) == teleport.RemoteClusterStatusOnline
-}
+//func (s *remoteSite) isOnline(conn services.TunnelConnection) bool {
+//	return services.TunnelConnectionStatus(s.clock, conn) == teleport.RemoteClusterStatusOnline
+//}
 
-// findDisconnectedProxies finds proxies that do not have inbound reverse tunnel
-// connections
-func (s *remoteSite) findDisconnectedProxies() ([]services.Server, error) {
-	connInfo := s.copyConnInfo()
-	conns, err := s.localAccessPoint.GetTunnelConnections(s.domainName, services.SkipValidation())
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	connected := make(map[string]bool)
-	for _, conn := range conns {
-		if s.isOnline(conn) {
-			connected[conn.GetProxyName()] = true
-		}
-	}
-	proxies, err := s.localAccessPoint.GetProxies()
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	var missing []services.Server
-	for i := range proxies {
-		proxy := proxies[i]
-		// do not add this proxy to the list of disconnected proxies
-		if !connected[proxy.GetName()] && proxy.GetName() != connInfo.GetProxyName() {
-			missing = append(missing, proxy)
-		}
-	}
-	return missing, nil
-}
+//// findDisconnectedProxies finds proxies that do not have inbound reverse tunnel
+//// connections
+//func (s *remoteSite) findDisconnectedProxies() ([]services.Server, error) {
+//	connInfo := s.copyConnInfo()
+//	conns, err := s.localAccessPoint.GetTunnelConnections(s.domainName, services.SkipValidation())
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//	connected := make(map[string]bool)
+//	for _, conn := range conns {
+//		if s.isOnline(conn) {
+//			connected[conn.GetProxyName()] = true
+//		}
+//	}
+//	proxies, err := s.localAccessPoint.GetProxies()
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//
+//	//for i, ee := range conns {
+//	//	fmt.Printf("--> i=%v, GetProxyName(): %v. %v.\n", i, ee.GetProxyName(), ee)
+//	//}
+//	//for i, ee := range proxies {
+//	//	fmt.Printf("--> i=%v, GetName(): %v. %v.\n", i, ee.GetName(), ee)
+//	//}
+//
+//	var missing []services.Server
+//	for i := range proxies {
+//		proxy := proxies[i]
+//		// do not add this proxy to the list of disconnected proxies
+//		if !connected[proxy.GetName()] && proxy.GetName() != connInfo.GetProxyName() {
+//			missing = append(missing, proxy)
+//		}
+//	}
+//	return missing, nil
+//}
 
-// sendDiscovery requests sends special "Discovery requests"
-// back to the connected agent.
-// Discovery request consists of the proxies that are part
-// of the cluster, but did not receive the connection from the agent.
-// Agent will act on a discovery request attempting
-// to establish connection to the proxies that were not discovered.
-// See package documentation for more details.
-func (s *remoteSite) sendDiscoveryRequest() error {
-	disconnectedProxies, err := s.findDisconnectedProxies()
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	if len(disconnectedProxies) == 0 {
-		return nil
-	}
-	clusterName, err := s.localAccessPoint.GetDomainName()
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	connInfo := s.copyConnInfo()
-	s.Debugf("proxy %q is going to request discovery for: %q", connInfo.GetProxyName(), Proxies(disconnectedProxies))
-	req := discoveryRequest{
-		ClusterName: clusterName,
-		Proxies:     disconnectedProxies,
-	}
-	payload, err := marshalDiscoveryRequest(req)
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	send := func() error {
-		remoteConn, err := s.nextConn()
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		discoveryC, err := remoteConn.openDiscoveryChannel()
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		_, err = discoveryC.SendRequest("discovery", false, payload)
-		if err != nil {
-			remoteConn.markInvalid(err)
-			s.Errorf("disconnecting cluster on %v, err: %v",
-				remoteConn.conn.RemoteAddr(),
-				err)
-			return trace.Wrap(err)
-		}
-		return nil
-	}
+//// sendDiscovery requests sends special "Discovery requests"
+//// back to the connected agent.
+//// Discovery request consists of the proxies that are part
+//// of the cluster, but did not receive the connection from the agent.
+//// Agent will act on a discovery request attempting
+//// to establish connection to the proxies that were not discovered.
+//// See package documentation for more details.
+//func (s *remoteSite) sendDiscoveryRequest() error {
+//	disconnectedProxies, err := s.findDisconnectedProxies()
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	if len(disconnectedProxies) == 0 {
+//		return nil
+//	}
+//	clusterName, err := s.localAccessPoint.GetDomainName()
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	connInfo := s.copyConnInfo()
+//	s.Debugf("proxy %q is going to request discovery for: %q", connInfo.GetProxyName(), Proxies(disconnectedProxies))
+//	req := discoveryRequest{
+//		ClusterName: clusterName,
+//		Proxies:     disconnectedProxies,
+//	}
+//	payload, err := marshalDiscoveryRequest(req)
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	send := func() error {
+//		remoteConn, err := s.nextConn()
+//		if err != nil {
+//			return trace.Wrap(err)
+//		}
+//		discoveryC, err := remoteConn.openDiscoveryChannel()
+//		if err != nil {
+//			return trace.Wrap(err)
+//		}
+//		_, err = discoveryC.SendRequest("discovery", false, payload)
+//		if err != nil {
+//			remoteConn.markInvalid(err)
+//			s.Errorf("disconnecting cluster on %v, err: %v",
+//				remoteConn.conn.RemoteAddr(),
+//				err)
+//			return trace.Wrap(err)
+//		}
+//		return nil
+//	}
+//
+//	// loop over existing connections (reverse tunnels) and try to send discovery
+//	// requests to the remote cluster
+//	for i := 0; i < s.connectionCount(); i++ {
+//		err := send()
+//		if err != nil {
+//			s.Warningf("%v", err)
+//		}
+//	}
+//	return nil
+//}
 
-	// loop over existing connections (reverse tunnels) and try to send discovery
-	// requests to the remote cluster
-	for i := 0; i < s.connectionCount(); i++ {
-		err := send()
-		if err != nil {
-			s.Warningf("%v", err)
-		}
-	}
-	return nil
-}
-
-// dialAccessPoint establishes a connection from the proxy (reverse tunnel server)
-// back into the client using previously established tunnel.
-func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
-	try := func() (net.Conn, error) {
-		remoteConn, err := s.nextConn()
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		ch, _, err := remoteConn.sshConn.OpenChannel(chanAccessPoint, nil)
-		if err != nil {
-			remoteConn.markInvalid(err)
-			s.Errorf("disconnecting cluster on %v, err: %v",
-				remoteConn.conn.RemoteAddr(),
-				err)
-			return nil, trace.Wrap(err)
-		}
-		s.Debugf("success dialing to cluster")
-		return utils.NewChConn(remoteConn.sshConn, ch), nil
-	}
-
-	for {
-		conn, err := try()
-		if err != nil {
-			if trace.IsNotFound(err) {
-				return nil, trace.Wrap(err)
-			}
-			continue
-		}
-		return conn, nil
-	}
-}
+//// dialAccessPoint establishes a connection from the proxy (reverse tunnel server)
+//// back into the client using previously established tunnel.
+//func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
+//	try := func() (net.Conn, error) {
+//		remoteConn, err := s.GetConn()
+//		if err != nil {
+//			return nil, trace.Wrap(err)
+//		}
+//		ch, _, err := remoteConn.sshConn.OpenChannel(chanAccessPoint, nil)
+//		if err != nil {
+//			remoteConn.markInvalid(err)
+//			s.Errorf("disconnecting cluster on %v, err: %v",
+//				remoteConn.conn.RemoteAddr(),
+//				err)
+//			return nil, trace.Wrap(err)
+//		}
+//		s.Debugf("success dialing to cluster")
+//		return utils.NewChConn(remoteConn.sshConn, ch), nil
+//	}
+//
+//	for {
+//		conn, err := try()
+//		if err != nil {
+//			if trace.IsNotFound(err) {
+//				return nil, trace.Wrap(err)
+//			}
+//			continue
+//		}
+//		return conn, nil
+//	}
+//}
 
 func (s *remoteSite) DialAuthServer() (conn net.Conn, err error) {
 	return s.connThroughTunnel(chanTransportDialReq, RemoteAuthServer)
@@ -649,74 +683,75 @@ func (s *remoteSite) dialWithAgent(params DialParams) (net.Conn, error) {
 	return conn, nil
 }
 
-func (s *remoteSite) connThroughTunnel(transportType string, data string) (conn net.Conn, err error) {
-	var stop bool
+//func (s *remoteSite) connThroughTunnel(transportType string, data string) (conn net.Conn, err error) {
+//	var stop bool
+//
+//	s.Debugf("Requesting %v connection to remote site with payload: %v", transportType, data)
+//
+//	// loop through existing TCP/IP connections (reverse tunnels) and try
+//	// to establish an inbound connection-over-ssh-channel to the remote
+//	// cluster (AKA "remotetunnel agent"):
+//	for i := 0; i < s.connectionCount() && !stop; i++ {
+//		conn, stop, err = s.chanTransportConn(transportType, data)
+//		if err == nil {
+//			return conn, nil
+//		}
+//		s.Warnf("Request for %v connection to remote site failed: %v", transportType, err)
+//	}
+//	// didn't connect and no error? this means we didn't have any connected
+//	// tunnels to try
+//	if err == nil {
+//		err = trace.ConnectionProblem(nil, "%v is offline", s.GetName())
+//	}
+//	return nil, err
+//}
+//
+//func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.Conn, bool, error) {
+//	var stop bool
+//
+//	remoteConn, err := s.GetConn()
+//	if err != nil {
+//		return nil, stop, trace.Wrap(err)
+//	}
+//	var ch ssh.Channel
+//	ch, _, err = remoteConn.sshConn.OpenChannel(chanTransport, nil)
+//	if err != nil {
+//		remoteConn.markInvalid(err)
+//		return nil, stop, trace.Wrap(err)
+//	}
+//	// send a special SSH out-of-band request called "teleport-transport"
+//	// the agent on the other side will create a new TCP/IP connection to
+//	// 'addr' on its network and will start proxying that connection over
+//	// this SSH channel:
+//	var dialed bool
+//	dialed, err = ch.SendRequest(transportType, true, []byte(addr))
+//	if err != nil {
+//		return nil, stop, trace.Wrap(err)
+//	}
+//	stop = true
+//	if !dialed {
+//		defer ch.Close()
+//		// pull the error message from the tunnel client (remote cluster)
+//		// passed to us via stderr:
+//		errMessage, _ := ioutil.ReadAll(ch.Stderr())
+//		if errMessage == nil {
+//			errMessage = []byte("failed connecting to " + addr)
+//		}
+//		return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
+//	}
+//	return utils.NewChConn(remoteConn.sshConn, ch), stop, nil
+//}
 
-	s.Debugf("Requesting %v connection to remote site with payload: %v", transportType, data)
-
-	// loop through existing TCP/IP connections (reverse tunnels) and try
-	// to establish an inbound connection-over-ssh-channel to the remote
-	// cluster (AKA "remotetunnel agent"):
-	for i := 0; i < s.connectionCount() && !stop; i++ {
-		conn, stop, err = s.chanTransportConn(transportType, data)
-		if err == nil {
-			return conn, nil
-		}
-		s.Warnf("Request for %v connection to remote site failed: %v", transportType, err)
-	}
-	// didn't connect and no error? this means we didn't have any connected
-	// tunnels to try
-	if err == nil {
-		err = trace.ConnectionProblem(nil, "%v is offline", s.GetName())
-	}
-	return nil, err
-}
-
-func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.Conn, bool, error) {
-	var stop bool
-
-	remoteConn, err := s.nextConn()
-	if err != nil {
-		return nil, stop, trace.Wrap(err)
-	}
-	var ch ssh.Channel
-	ch, _, err = remoteConn.sshConn.OpenChannel(chanTransport, nil)
-	if err != nil {
-		remoteConn.markInvalid(err)
-		return nil, stop, trace.Wrap(err)
-	}
-	// send a special SSH out-of-band request called "teleport-transport"
-	// the agent on the other side will create a new TCP/IP connection to
-	// 'addr' on its network and will start proxying that connection over
-	// this SSH channel:
-	var dialed bool
-	dialed, err = ch.SendRequest(transportType, true, []byte(addr))
-	if err != nil {
-		return nil, stop, trace.Wrap(err)
-	}
-	stop = true
-	if !dialed {
-		defer ch.Close()
-		// pull the error message from the tunnel client (remote cluster)
-		// passed to us via stderr:
-		errMessage, _ := ioutil.ReadAll(ch.Stderr())
-		if errMessage == nil {
-			errMessage = []byte("failed connecting to " + addr)
-		}
-		return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
-	}
-	return utils.NewChConn(remoteConn.sshConn, ch), stop, nil
-}
-
-func (s *remoteSite) handleAuthProxy(w http.ResponseWriter, r *http.Request) {
-	s.Debugf("handleAuthProxy()")
-
-	fwd, err := oxyforward.New(oxyforward.RoundTripper(s.transport), oxyforward.Logger(s.Entry))
-	if err != nil {
-		roundtrip.ReplyJSON(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	r.URL.Scheme = "http"
-	r.URL.Host = "stub"
-	fwd.ServeHTTP(w, r)
-}
+// Remove, no one uses this.
+//func (s *remoteSite) handleAuthProxy(w http.ResponseWriter, r *http.Request) {
+//	s.Debugf("handleAuthProxy()")
+//
+//	fwd, err := oxyforward.New(oxyforward.RoundTripper(s.transport), oxyforward.Logger(s.Entry))
+//	if err != nil {
+//		roundtrip.ReplyJSON(w, http.StatusInternalServerError, err.Error())
+//		return
+//	}
+//	r.URL.Scheme = "http"
+//	r.URL.Host = "stub"
+//	fwd.ServeHTTP(w, r)
+//}
