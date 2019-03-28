@@ -867,57 +867,6 @@ func (s *server) RemoveSite(domainName string) error {
 	return trace.NotFound("cluster %q is not found", domainName)
 }
 
-type remoteConn struct {
-	sshConn      ssh.Conn
-	conn         net.Conn
-	invalid      int32
-	log          *log.Entry
-	counter      int32
-	discoveryC   ssh.Channel
-	discoveryErr error
-	closed       int32
-}
-
-func (rc *remoteConn) openDiscoveryChannel() (ssh.Channel, error) {
-	if rc.discoveryC != nil {
-		return rc.discoveryC, nil
-	}
-	if rc.discoveryErr != nil {
-		return nil, trace.Wrap(rc.discoveryErr)
-	}
-	discoveryC, _, err := rc.sshConn.OpenChannel(chanDiscovery, nil)
-	if err != nil {
-		rc.discoveryErr = err
-		return nil, trace.Wrap(err)
-	}
-	rc.discoveryC = discoveryC
-	return rc.discoveryC, nil
-}
-
-func (rc *remoteConn) String() string {
-	return fmt.Sprintf("remoteConn(remoteAddr=%v)", rc.conn.RemoteAddr())
-}
-
-func (rc *remoteConn) Close() error {
-	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
-		// already closed
-		return nil
-	}
-	if rc.discoveryC != nil {
-		rc.discoveryC.Close()
-		rc.discoveryC = nil
-	}
-	return rc.sshConn.Close()
-}
-
-func (rc *remoteConn) markInvalid(err error) {
-	atomic.StoreInt32(&rc.invalid, 1)
-}
-
-func (rc *remoteConn) isInvalid() bool {
-	return atomic.LoadInt32(&rc.invalid) == 1
-}
-
 // newRemoteSite helper creates and initializes 'remoteSite' instance
 func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	connInfo, err := services.NewTunnelConnection(
@@ -982,7 +931,7 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	}
 	remoteSite.certificateCache = certificateCache
 
-	go remoteSite.periodicSendDiscoveryRequests()
+	//go remoteSite.periodicSendDiscoveryRequests()
 	go remoteSite.periodicUpdateCertAuthorities()
 
 	return remoteSite, nil

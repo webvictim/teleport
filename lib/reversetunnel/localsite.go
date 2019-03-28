@@ -223,8 +223,9 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 	return conn, nil
 }
 
-func (s *localSite) handleHeartbeat(conn net.Conn, sconn ssh.Conn, newChannel ssh.NewChannel) {
-	s.addConn("foo.example.com", conn, sconn)
+func (s *localSite) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, newChannel ssh.NewChannel) {
+	nodeID := sconn.Permissions.Extensions[extHost]
+	s.addConn(nodeID, conn, sconn)
 
 	_, reqs, err := newChannel.Accept()
 	if err != nil {
