@@ -18,7 +18,9 @@ package reversetunnel
 
 import (
 	"fmt"
+	//"io/ioutil"
 	"net"
+	//"strings"
 	"sync"
 	"time"
 
@@ -29,7 +31,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv/forward"
-	"github.com/gravitational/teleport/lib/utils"
+	//"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/teleport/lib/utils/proxy"
 
 	"github.com/gravitational/trace"
@@ -148,27 +150,33 @@ func (s *localSite) DialAuthServer() (conn net.Conn, err error) {
 }
 
 func (s *localSite) Dial(params DialParams) (net.Conn, error) {
-	//err := params.CheckAndSetDefaults()
-	//if err != nil {
-	//	return nil, trace.Wrap(err)
-	//}
+	err := params.CheckAndSetDefaults()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
 
-	//clusterConfig, err := s.accessPoint.GetClusterConfig()
-	//if err != nil {
-	//	return nil, trace.Wrap(err)
-	//}
+	// If reverse tunnel use is requested (server heartbeat back indicating
+	// that it connected via a reverse tunnel) then build a connection over the
+	// reverse tunnel instead of dailing.
+	if params.UseReverseTunnel {
+		return s.chanTransportConn(params.Address)
+	}
 
-	//// if the proxy is in recording mode use the agent to dial and build a
-	//// in-memory forwarding server
-	//if clusterConfig.GetSessionRecording() == services.RecordAtProxy {
-	//	if params.UserAgent == nil {
-	//		return nil, trace.BadParameter("user agent missing")
-	//	}
-	//	return s.dialWithAgent(params)
-	//}
+	clusterConfig, err := s.accessPoint.GetClusterConfig()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
 
-	//return s.DialTCP(params.From, params.To)
-	return s.chanTransportConn("", "")
+	// If the proxy is in recording mode use the agent to dial and build a
+	// in-memory forwarding server.
+	if clusterConfig.GetSessionRecording() == services.RecordAtProxy {
+		if params.UserAgent == nil {
+			return nil, trace.BadParameter("user agent missing")
+		}
+		return s.dialWithAgent(params)
+	}
+
+	return s.DialTCP(params.From, params.To)
 }
 
 func (s *localSite) DialTCP(from net.Addr, to net.Addr) (net.Conn, error) {
@@ -231,19 +239,18 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 
 func (s *localSite) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, newChannel ssh.NewChannel) {
 	nodeID := sconn.Permissions.Extensions[extHost]
+	rconn := s.addConn("example.com", conn, sconn)
 
-	rconn := s.addConn(nodeID, conn, sconn)
-
-	_, reqs, err := newChannel.Accept()
+	_, requestCh, err := newChannel.Accept()
 	if err != nil {
-		//log.Error(trace.Wrap(err))
+		s.log.Errorf("Failed to accept channel for %v: %v.", rconn.domain, err)
 		sconn.Close()
 		return
 	}
 
 	for {
 		select {
-		case req := <-reqs:
+		case req := <-requestCh:
 			if req == nil {
 				s.log.Infof("Cluster agent for %v disconnected.", rconn.domain)
 				rconn.markInvalid(trace.ConnectionProblem(nil, "agent disconnected"))
@@ -268,29 +275,24 @@ func (s *localSite) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, newCha
 				s.log.Debugf("ping <- %v", rconn.conn.RemoteAddr())
 			}
 			go s.registerHeartbeat(nodeID, time.Now())
-
-			//err := s.accessPoint.UpsertTunnelConnection(connInfo)
-			//if err != nil {
-			//	fmt.Printf("--> what: %v.\n", err)
-			//}
 		}
 	}
 
 }
 
 func (s *localSite) registerHeartbeat(nodeID string, t time.Time) {
-	connInfo, err := services.NewTunnelConnection(
-		nodeID,
+	tunnelConn, err := services.NewTunnelConnection(
+		fmt.Sprintf("%v-%v", s.srv.ID, s.domainName),
 		services.TunnelConnectionSpecV2{
 			ClusterName:   s.domainName,
 			ProxyName:     s.srv.ID,
-			LastHeartbeat: time.Now().UTC(),
+			LastHeartbeat: s.clock.Now().UTC(),
 		},
 	)
-	connInfo.SetLastHeartbeat(t)
-	connInfo.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
+	tunnelConn.SetLastHeartbeat(t)
+	tunnelConn.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
 
-	err = s.accessPoint.UpsertTunnelConnection(connInfo)
+	err = s.accessPoint.UpsertTunnelConnection(tunnelConn)
 	if err != nil {
 		s.log.Warnf("Failed to register heartbeat for %v: %v.", nodeID, err)
 	}
@@ -301,58 +303,25 @@ func (s *localSite) addConn(nodeID string, conn net.Conn, sconn ssh.Conn) *remot
 	defer s.Unlock()
 
 	rconn := newRemoteConn(conn, sconn, s.accessPoint, nodeID, s.srv.ID)
-	s.remoteConns[nodeID] = rconn
+	//s.remoteConns[nodeID] = rconn
+	s.remoteConns["server03"] = rconn
 
 	return rconn
 }
 
-func (s *localSite) chanTransportConn(transportType string, addr string) (net.Conn, error) {
-	rconn, ok := s.remoteConns["foo.example.com"]
+func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
+	s.log.Debugf("Connecting to %v through tunnel.", addr)
+	//rconn, ok := s.remoteConns[addr]
+	rconn, ok := s.remoteConns["server03"]
 	if !ok {
-		return nil, trace.BadParameter("what?")
+		return nil, trace.BadParameter("no reverse tunnel for %v found", addr)
 	}
 
-	channel, err := rconn.OpenChannel("teleport-transport-node", nil)
+	channel, err := rconn.OpenChannel(chanTransportNode, nil)
 	if err != nil {
 		rconn.markInvalid(err)
 		return nil, trace.Wrap(err)
 	}
 
-	// Send a special SSH out-of-band request called "teleport-transport"
-	// the agent on the other side will create a new TCP/IP connection to
-	// 'addr' on its network and will start proxying that connection over
-	// this SSH channel.
-	//var dialed bool
-	_, err = channel.SendRequest(transportType, true, []byte(addr))
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	//stop = true
-	//if !dialed {
-	//	defer ch.Close()
-	//	// pull the error message from the tunnel client (remote cluster)
-	//	// passed to us via stderr:
-	//	errMessage, _ := ioutil.ReadAll(ch.Stderr())
-	//	if errMessage == nil {
-	//		errMessage = []byte("failed connecting to " + addr)
-	//	}
-	//	return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
-	//}
-	return utils.NewChConn(rconn.sconn, channel), nil
-}
-
-func findServer(addr string, servers []services.Server) (services.Server, error) {
-	for i := range servers {
-		srv := servers[i]
-		_, port, err := net.SplitHostPort(srv.GetAddr())
-		if err != nil {
-			logrus.Warningf("server %v(%v) has incorrect address format (%v)",
-				srv.GetAddr(), srv.GetHostname(), err.Error())
-		} else {
-			if (len(srv.GetHostname()) != 0) && (len(port) != 0) && (addr == srv.GetHostname()+":"+port || addr == srv.GetAddr()) {
-				return srv, nil
-			}
-		}
-	}
-	return nil, trace.NotFound("server %v is unknown", addr)
+	return rconn.ChannelConn(channel), nil
 }

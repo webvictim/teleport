@@ -114,11 +114,11 @@ func (c *remoteConn) Close() error {
 }
 
 func (c *remoteConn) OpenChannel(name string, data []byte) (ssh.Channel, error) {
-	channel, requestCh, err := c.sconn.OpenChannel(name, data)
+	channel, _, err := c.sconn.OpenChannel(name, data)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	ssh.DiscardRequests(requestCh)
+	//ssh.DiscardRequests(requestCh)
 
 	return channel, nil
 }
@@ -222,13 +222,16 @@ func (c *remoteConn) findAndSend() error {
 // findDisconnectedProxies finds proxies that do not have inbound reverse tunnel
 // connections
 func (c *remoteConn) findDisconnectedProxies() ([]services.Server, error) {
+	fmt.Printf("--> findDisconnectedProxies: domain: %v, self: %v.\n", c.domain, c.proxyName)
 	// Find all proxies that have connection from the remote domain.
 	conns, err := c.accessPoint.GetTunnelConnections(c.domain, services.SkipValidation())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
+	fmt.Printf("--> len(conns): %v.\n", len(conns))
 	connected := make(map[string]bool)
 	for _, conn := range conns {
+		fmt.Printf("--> tunnelConn: %v.\n", conn.GetProxyName())
 		if c.isOnline(conn) {
 			connected[conn.GetProxyName()] = true
 		}
@@ -242,9 +245,10 @@ func (c *remoteConn) findDisconnectedProxies() ([]services.Server, error) {
 	}
 	for i := range proxies {
 		proxy := proxies[i]
+		fmt.Printf("--> proxy: %v.\n", proxy.GetName())
 
 		// A proxy should never add itself to the list of missing proxies.
-		if proxy.GetName() != c.proxyName {
+		if proxy.GetName() == c.proxyName {
 			continue
 		}
 
@@ -252,6 +256,8 @@ func (c *remoteConn) findDisconnectedProxies() ([]services.Server, error) {
 			missing = append(missing, proxy)
 		}
 	}
+
+	fmt.Printf("--> missing: %v.\n", missing)
 	return missing, nil
 }
 

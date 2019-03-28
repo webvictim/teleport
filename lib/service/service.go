@@ -1310,7 +1310,8 @@ func (process *TeleportProcess) initSSH() error {
 
 		// Keep upserting this with a ttl.
 		reverseTunnel := services.NewReverseTunnel("example.com", []string{
-			"localhost:3024",
+			//	"localhost:3024",
+			"localhost:2024",
 		})
 		reverseTunnel.SetTunnelType(services.NodeTunnel)
 		err = conn.Client.UpsertReverseTunnel(reverseTunnel)
@@ -1321,7 +1322,8 @@ func (process *TeleportProcess) initSSH() error {
 		agentPool, err := reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
 			HostUUID:    conn.ServerIdentity.ID.HostUUID,
 			Client:      conn.Client,
-			AccessPoint: authClient,
+			AccessPoint: conn.Client,
+			//AccessPoint: authClient,
 			HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
 			Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 			//KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),

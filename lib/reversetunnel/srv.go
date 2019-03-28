@@ -316,10 +316,11 @@ func (s *server) periodicFunctions() {
 			if err != nil {
 				s.Warningf("Failed to fetch cluster peers: %v.", err)
 			}
-			err = s.disconnectClusters()
-			if err != nil {
-				s.Warningf("Failed to disconnect clusters: %v.", err)
-			}
+			// Re-add in the future.
+			//err = s.disconnectClusters()
+			//if err != nil {
+			//	s.Warningf("Failed to disconnect clusters: %v.", err)
+			//}
 			err = s.reportClusterStats()
 			if err != nil {
 				s.Warningf("Failed to report cluster stats: %v.", err)

@@ -318,31 +318,33 @@ func (a *Agent) connect() (conn *ssh.Client, err error) {
 
 func (a *Agent) proxyNodeTransport(sconn ssh.Conn, ch ssh.Channel, reqC <-chan *ssh.Request) {
 	fmt.Printf("--> IN PROXY NODE TRANSPORT.\n")
-	a.Debugf("proxyNodeTransport")
-	//defer ch.Close()
+	defer ch.Close()
 
-	// always push space into stderr to make sure the caller can always
-	// safely call read(stderr) without blocking. this stderr is only used
-	// to request proxying of TCP/IP via reverse tunnel.
-	fmt.Fprint(ch.Stderr(), " ")
+	//// always push space into stderr to make sure the caller can always
+	//// safely call read(stderr) without blocking. this stderr is only used
+	//// to request proxying of TCP/IP via reverse tunnel.
+	//fmt.Fprint(ch.Stderr(), " ")
 
-	var req *ssh.Request
-	select {
-	case <-a.ctx.Done():
-		a.Infof("is closed, returning")
-		return
-	case req = <-reqC:
-		if req == nil {
-			a.Infof("connection closed, returning")
-			return
-		}
-	case <-time.After(defaults.DefaultDialTimeout):
-		a.Warningf("timeout waiting for dial")
-		return
-	}
+	//fmt.Printf("--> listeing for req.\n")
+	//var req *ssh.Request
+	//select {
+	//case <-a.ctx.Done():
+	//	a.Infof("is closed, returning")
+	//	return
+	//case req = <-reqC:
+	//	if req == nil {
+	//		a.Infof("connection closed, returning")
+	//		return
+	//	}
+	//case <-time.After(defaults.DefaultDialTimeout):
+	//	a.Warningf("timeout waiting for dial")
+	//	return
+	//}
 
-	req.Reply(true, []byte("connected"))
+	//req.Reply(true, []byte("connected"))
 	chconn := utils.NewChConn(sconn, ch)
+
+	fmt.Printf("--> before handle connection.\n")
 
 	//go func() {
 	a.AgentConfig.CH.HandleConnection(chconn)
@@ -844,6 +846,7 @@ const (
 	chanHeartbeat        = "teleport-heartbeat"
 	chanAccessPoint      = "teleport-access-point"
 	chanTransport        = "teleport-transport"
+	chanTransportNode    = "teleport-transport-node"
 	chanTransportDialReq = "teleport-transport-dial"
 	chanDiscovery        = "teleport-discovery"
 )

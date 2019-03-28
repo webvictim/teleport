@@ -311,10 +311,11 @@ func (t *proxySubsys) proxyToHost(
 		Addr: "foo.example.com:1234",
 	}
 	conn, err := site.Dial(reversetunnel.DialParams{
-		From:      remoteAddr,
-		To:        toAddr,
-		UserAgent: t.agent,
-		Address:   t.host,
+		From:             remoteAddr,
+		To:               toAddr,
+		UserAgent:        t.agent,
+		Address:          t.host,
+		UseReverseTunnel: true,
 	})
 	if err != nil {
 		return trace.Wrap(err)
