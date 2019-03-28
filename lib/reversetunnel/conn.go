@@ -2,6 +2,7 @@ package reversetunnel
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -9,9 +10,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
+	"github.com/gravitational/teleport/lib/utils"
 
 	"github.com/gravitational/trace"
 
@@ -58,10 +61,6 @@ type remoteConn struct {
 	closeCancel  context.CancelFunc
 
 	clock clockwork.Clock
-
-	//discoveryErr error
-	//counter      int32
-
 }
 
 func newRemoteConn(conn net.Conn, sconn ssh.Conn, accessPoint auth.AccessPoint, domain string, proxyName string) *remoteConn {
@@ -74,6 +73,7 @@ func newRemoteConn(conn net.Conn, sconn ssh.Conn, accessPoint auth.AccessPoint, 
 		accessPoint: accessPoint,
 		domain:      domain,
 		proxyName:   proxyName,
+		clock:       clockwork.NewRealClock(),
 	}
 
 	c.closeContext, c.closeCancel = context.WithCancel(context.Background())
@@ -113,13 +113,27 @@ func (c *remoteConn) Close() error {
 
 }
 
+func (c *remoteConn) OpenChannel(name string, data []byte) (ssh.Channel, error) {
+	channel, requestCh, err := c.sconn.OpenChannel(name, data)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	ssh.DiscardRequests(requestCh)
+
+	return channel, nil
+}
+
+func (c *remoteConn) ChannelConn(channel ssh.Channel) net.Conn {
+	return utils.NewChConn(c.sconn, channel)
+}
+
 func (c *remoteConn) markInvalid(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	atomic.StoreInt32(&c.invalid, 1)
 	c.lastError = err
-	s.log.Errorf("Disconnecting connection to %v: %v.", remoteConn.conn.RemoteAddr(), err)
+	c.log.Errorf("Disconnecting connection to %v: %v.", c.conn.RemoteAddr(), err)
 }
 
 func (c *remoteConn) isInvalid() bool {
@@ -143,7 +157,7 @@ func (c *remoteConn) openDiscoveryChannel() (ssh.Channel, error) {
 		c.markInvalid(err)
 		return nil, trace.Wrap(err)
 	}
-	return c.discoveryC, nil
+	return c.discoveryCh, nil
 }
 
 func (c *remoteConn) periodicSendDiscoveryRequests() {
@@ -190,7 +204,7 @@ func (c *remoteConn) findAndSend() error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	s.log.Debugf("Proxy %v sending discovery requests for: %v", c.proxyName, Proxies(disconnectedProxies))
+	c.log.Debugf("Proxy %v sending discovery requests for: %v.", c.proxyName, Proxies(disconnectedProxies))
 
 	// Create the discovery request and send it all connected severs.
 	req := discoveryRequest{

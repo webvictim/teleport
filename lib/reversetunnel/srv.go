@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
+	//"sync/atomic"
 	"time"
 
 	"github.com/gravitational/teleport"

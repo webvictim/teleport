@@ -23,7 +23,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"sync"

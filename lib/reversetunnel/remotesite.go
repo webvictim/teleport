@@ -33,7 +33,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv/forward"
-	"github.com/gravitational/teleport/lib/utils"
+	//"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/trace"
 
 	oxyforward "github.com/gravitational/oxy/forward"
@@ -193,19 +193,21 @@ func (s *remoteSite) nextConn() (*remoteConn, error) {
 
 // addConn helper adds a new active remote cluster connection to the list
 // of such connections
-func (s *remoteSite) addConn(conn net.Conn, sshConn ssh.Conn) (*remoteConn, error) {
-	rc := &remoteConn{
-		sshConn: sshConn,
-		conn:    conn,
-		log:     s.Entry,
-	}
-
+func (s *remoteSite) addConn(conn net.Conn, sconn ssh.Conn) (*remoteConn, error) {
 	s.Lock()
 	defer s.Unlock()
 
-	s.connections = append(s.connections, rc)
+	//rc := &remoteConn{
+	//	sshConn: sshConn,
+	//	conn:    conn,
+	//	log:     s.Entry,
+	//}
+
+	rconn := newRemoteConn(conn, sconn, s.localAccessPoint, s.domainName, s.connInfo.GetProxyName())
+	s.connections = append(s.connections, rconn)
 	s.lastUsed = 0
-	return rc, nil
+
+	return rconn, nil
 }
 
 func (s *remoteSite) GetStatus() string {
@@ -531,7 +533,7 @@ func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		ch, _, err := remoteConn.sshConn.OpenChannel(chanAccessPoint, nil)
+		channel, err := remoteConn.OpenChannel(chanAccessPoint, nil)
 		if err != nil {
 			remoteConn.markInvalid(err)
 			s.Errorf("disconnecting cluster on %v, err: %v",
@@ -540,7 +542,7 @@ func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
 			return nil, trace.Wrap(err)
 		}
 		s.Debugf("success dialing to cluster")
-		return utils.NewChConn(remoteConn.sshConn, ch), nil
+		return remoteConn.ChannelConn(channel), nil
 	}
 
 	for {
@@ -675,14 +677,13 @@ func (s *remoteSite) connThroughTunnel(transportType string, data string) (conn 
 func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.Conn, bool, error) {
 	var stop bool
 
-	remoteConn, err := s.nextConn()
+	rconn, err := s.nextConn()
 	if err != nil {
 		return nil, stop, trace.Wrap(err)
 	}
-	var ch ssh.Channel
-	ch, _, err = remoteConn.sshConn.OpenChannel(chanTransport, nil)
+	channel, err := rconn.OpenChannel(chanTransport, nil)
 	if err != nil {
-		remoteConn.markInvalid(err)
+		rconn.markInvalid(err)
 		return nil, stop, trace.Wrap(err)
 	}
 	// send a special SSH out-of-band request called "teleport-transport"
@@ -690,22 +691,22 @@ func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.C
 	// 'addr' on its network and will start proxying that connection over
 	// this SSH channel:
 	var dialed bool
-	dialed, err = ch.SendRequest(transportType, true, []byte(addr))
+	dialed, err = channel.SendRequest(transportType, true, []byte(addr))
 	if err != nil {
 		return nil, stop, trace.Wrap(err)
 	}
 	stop = true
 	if !dialed {
-		defer ch.Close()
+		defer channel.Close()
 		// pull the error message from the tunnel client (remote cluster)
 		// passed to us via stderr:
-		errMessage, _ := ioutil.ReadAll(ch.Stderr())
+		errMessage, _ := ioutil.ReadAll(channel.Stderr())
 		if errMessage == nil {
 			errMessage = []byte("failed connecting to " + addr)
 		}
 		return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
 	}
-	return utils.NewChConn(remoteConn.sshConn, ch), stop, nil
+	return rconn.ChannelConn(channel), stop, nil
 }
 
 func (s *remoteSite) handleAuthProxy(w http.ResponseWriter, r *http.Request) {
