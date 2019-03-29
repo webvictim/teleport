@@ -202,10 +202,10 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 		}
 		if filtered.Equal(agent.DiscoverProxies) {
 			foundAgent = true
-			agent.Debugf("agent is already discovering the same proxies as requested in %v", filtered)
+			agent.log.Debugf("agent is already discovering the same proxies as requested in %v", filtered)
 			return false
 		}
-		agent.Debugf("is obsolete, going to close", agent.getState(), agent.DiscoverProxies)
+		agent.log.Debugf("is obsolete, going to close", agent.getState(), agent.DiscoverProxies)
 		return true
 	})
 
@@ -218,6 +218,7 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 // FetchAndSyncAgents executes one time fetch and sync request
 // (used in tests instead of polling)
 func (m *AgentPool) FetchAndSyncAgents() error {
+	fmt.Printf("--> FetchAndSyncAgents.\n")
 	tunnels, err := m.cfg.AccessPoint.GetReverseTunnels()
 	if err != nil {
 		return trace.Wrap(err)
@@ -257,7 +258,7 @@ func filterAndClose(agents []*Agent, matchAgent matchAgentFn) []*Agent {
 	for i := range agents {
 		agent := agents[i]
 		if matchAgent(agent) {
-			agent.Debugf("Pool is closing agent.")
+			agent.log.Debugf("Pool is closing agent.")
 			agent.Close()
 		} else {
 			filtered = append(filtered, agent)

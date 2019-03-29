@@ -167,7 +167,7 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	} else {
 		a.state = agentStateDiscovering
 	}
-	a.log.Entry = log.WithFields(log.Fields{
+	a.log = log.WithFields(log.Fields{
 		trace.Component: teleport.ComponentReverseTunnelAgent,
 		trace.ComponentFields: log.Fields{
 			"target": cfg.Addr.String(),
@@ -343,15 +343,13 @@ func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 	var req *ssh.Request
 	select {
 	case <-a.ctx.Done():
-		a.Infof("is closed, returning")
 		return
 	case req = <-reqC:
 		if req == nil {
-			a.Infof("connection closed, returning")
 			return
 		}
 	case <-time.After(defaults.DefaultDialTimeout):
-		a.log.Warnf("timeout waiting for dial")
+		a.log.Warnf("Timeout waiting for dial request.")
 		return
 	}
 
@@ -464,7 +462,7 @@ func (a *Agent) run() {
 	}
 
 	// Successfully connected to remote cluster.
-	a.Infof("Connected to %s", conn.RemoteAddr())
+	a.log.Infof("Connected to %s.", conn.RemoteAddr())
 	if len(a.DiscoverProxies) != 0 {
 		// If not connected to a proxy in the discover list (which means we
 		// connected to a proxy we already have a connection to), try again.
@@ -484,7 +482,7 @@ func (a *Agent) run() {
 		select {
 		case a.EventsC <- ConnectedEvent:
 		case <-a.ctx.Done():
-			a.Debug("Context is closing.")
+			a.log.Debug("Context is closing.")
 			return
 		default:
 		}
@@ -534,7 +532,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 			bytes, _ := a.Clock.Now().UTC().MarshalText()
 			_, err := hb.SendRequest("ping", false, bytes)
 			if err != nil {
-				a.Error(err)
+				a.log.Error("Failed to send ping request: %v.", err)
 				return trace.Wrap(err)
 			}
 			a.log.Debugf("ping -> %v", conn.RemoteAddr())
@@ -598,23 +596,20 @@ func (a *Agent) handleDiscovery(ch ssh.Channel, reqC <-chan *ssh.Request) {
 		var req *ssh.Request
 		select {
 		case <-a.ctx.Done():
-			a.Infof("is closed, returning")
 			return
 		case req = <-reqC:
 			if req == nil {
-				a.Infof("connection closed, returning")
 				return
 			}
 			r, err := unmarshalDiscoveryRequest(req.Payload)
 			if err != nil {
-				a.log.Warnf("bad payload: %v", err)
+				a.log.Warnf("Failed to unmarshal discovery payload: %v.", err)
 				return
 			}
 			r.ClusterAddr = a.Addr
 			select {
 			case a.DiscoveryC <- r:
 			case <-a.ctx.Done():
-				a.Infof("is closed, returning")
 				return
 			default:
 			}
