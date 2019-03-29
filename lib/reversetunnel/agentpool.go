@@ -176,6 +176,7 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 	defer m.Unlock()
 
 	matchKey := req.key()
+	fmt.Printf("--> tryDiscover: matchKey: %v.\n", matchKey)
 
 	// if one of the proxies have been discovered or connected to
 	// remove proxy from discovery request

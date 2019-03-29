@@ -134,7 +134,8 @@ func (a *AgentConfig) CheckAndSetDefaults() error {
 // Discovering agent transitions between "discovering" -> "discovered" states.
 type Agent struct {
 	sync.RWMutex
-	*log.Entry
+
+	log *log.Entry
 	AgentConfig
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -166,7 +167,7 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	} else {
 		a.state = agentStateDiscovering
 	}
-	a.Entry = log.WithFields(log.Fields{
+	a.log.Entry = log.WithFields(log.Fields{
 		trace.Component: teleport.ComponentReverseTunnelAgent,
 		trace.ComponentFields: log.Fields{
 			"target": cfg.Addr.String(),
@@ -193,7 +194,7 @@ func (a *Agent) setStateAndPrincipals(state string, principals []string) {
 	a.Lock()
 	defer a.Unlock()
 	prev := a.state
-	a.Debugf("changing state %v -> %v", prev, state)
+	a.log.Debugf("changing state %v -> %v", prev, state)
 	a.state = state
 	a.stateChange = a.Clock.Now().UTC()
 	a.principals = principals
@@ -202,7 +203,7 @@ func (a *Agent) setState(state string) {
 	a.Lock()
 	defer a.Unlock()
 	prev := a.state
-	a.Debugf("changing state %v -> %v", prev, state)
+	a.log.Debugf("changing state %v -> %v", prev, state)
 	a.state = state
 	a.stateChange = a.Clock.Now().UTC()
 }
@@ -317,230 +318,10 @@ func (a *Agent) connect() (conn *ssh.Client, err error) {
 }
 
 func (a *Agent) proxyNodeTransport(sconn ssh.Conn, ch ssh.Channel, reqC <-chan *ssh.Request) {
-	fmt.Printf("--> IN PROXY NODE TRANSPORT.\n")
 	defer ch.Close()
 
-	//// always push space into stderr to make sure the caller can always
-	//// safely call read(stderr) without blocking. this stderr is only used
-	//// to request proxying of TCP/IP via reverse tunnel.
-	//fmt.Fprint(ch.Stderr(), " ")
-
-	//fmt.Printf("--> listeing for req.\n")
-	//var req *ssh.Request
-	//select {
-	//case <-a.ctx.Done():
-	//	a.Infof("is closed, returning")
-	//	return
-	//case req = <-reqC:
-	//	if req == nil {
-	//		a.Infof("connection closed, returning")
-	//		return
-	//	}
-	//case <-time.After(defaults.DefaultDialTimeout):
-	//	a.Warningf("timeout waiting for dial")
-	//	return
-	//}
-
-	//req.Reply(true, []byte("connected"))
-	chconn := utils.NewChConn(sconn, ch)
-
-	fmt.Printf("--> before handle connection.\n")
-
-	//go func() {
-	a.AgentConfig.CH.HandleConnection(chconn)
-	//}()
-	//go func() {
-	//	config := &ssh.ServerConfig{
-	//		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-	//			return &ssh.Permissions{
-	//				Extensions: map[string]string{
-	//					"pubkey-fp": ssh.FingerprintSHA256(pubKey),
-	//				},
-	//			}, nil
-	//		},
-	//	}
-	//	privateBytes, err := ioutil.ReadFile("/home/rjones/.ssh/id_rsa")
-	//	if err != nil {
-	//		log.Fatal("Failed to load private key: ", err)
-	//	}
-	//	private, err := ssh.ParsePrivateKey(privateBytes)
-	//	if err != nil {
-	//		log.Fatal("Failed to parse private key: ", err)
-	//	}
-	//	config.AddHostKey(private)
-
-	//	//privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	//	//if err != nil {
-	//	//	fmt.Printf("--> err: %v.\n", err)
-	//	//	return
-	//	//}
-	//	//signer, err := ssh.NewSignerFromKey(privateKey)
-	//	//if err != nil {
-	//	//	fmt.Printf("--> err: %v.\n", err)
-	//	//	return
-	//	//}
-	//	//config.AddHostKey(signer)
-
-	//	fmt.Printf("--> IN AGENT BEFORE HANDHSKAE\n")
-
-	//	_, chans, reqs, err := ssh.NewServerConn(chconn, config)
-	//	if err != nil {
-	//		fmt.Printf("--> 3 err: %v.\n", err)
-	//		return
-	//	}
-
-	//	fmt.Printf("--> HANDSHOOKED\n")
-
-	//	go ssh.DiscardRequests(reqs)
-
-	//	// Service the incoming Channel channel.
-	//	for newChannel := range chans {
-	//		// Channels have a type, depending on the application level
-	//		// protocol intended. In the case of a shell, the type is
-	//		// "session" and ServerShell may be used to present a simple
-	//		// terminal interface.
-	//		if newChannel.ChannelType() != "session" {
-	//			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-	//			continue
-	//		}
-	//		channel, requests, err := newChannel.Accept()
-	//		if err != nil {
-	//			fmt.Printf("--> 4 err: %v.\n", err)
-	//			return
-	//		}
-
-	//		// Sessions have out-of-band requests such as "shell",
-	//		// "pty-req" and "env".  Here we handle only the
-	//		// "shell" request.
-	//		go func(in <-chan *ssh.Request) {
-	//			for req := range in {
-	//				req.Reply(req.Type == "shell" || req.Type == "pty-req", nil)
-	//			}
-	//		}(requests)
-
-	//		term := terminal.NewTerminal(channel, "> ")
-
-	//		go func() {
-	//			defer channel.Close()
-	//			for {
-	//				line, err := term.ReadLine()
-	//				if err != nil {
-	//					break
-	//				}
-	//				fmt.Println(line)
-	//			}
-	//		}()
-	//	}
-	//}()
-
-	// successfully dialed
-	//req.Reply(true, []byte("connected"))
-	//a.Debugf("Successfully dialed to %v, start proxying.", server)
-
-	//wg := sync.WaitGroup{}
-	//wg.Add(2)
-
-	//go func() {
-	//	//defer wg.Done()
-	//	// make sure that we close the client connection on a channel
-	//	// close, otherwise the other goroutine would never know
-	//	// as it will block on read from the connection
-	//	//defer conn.Close()
-	//	io.Copy(chconn, ch)
-	//}()
-
-	//go func() {
-	//	//	defer wg.Done()
-	//	io.Copy(ch, chconn)
-	//}()
-
-	//time.Sleep(5 * time.Second)
-
-	//wg.Wait()
-
-	//server := string(req.Payload)
-	//var servers []string
-
-	//// if the request is for the special string @remote-auth-server, then get the
-	//// list of auth servers and return that. otherwise try and connect to the
-	//// passed in server.
-	//switch server {
-	//case RemoteAuthServer:
-	//	authServers, err := a.Client.GetAuthServers()
-	//	if err != nil {
-	//		a.Warningf("Unable retrieve list of remote Auth Servers: %v.", err)
-	//		return
-	//	}
-	//	if len(authServers) == 0 {
-	//		a.Warningf("No remote Auth Servers returned by client.")
-	//		return
-	//	}
-	//	for _, as := range authServers {
-	//		servers = append(servers, as.GetAddr())
-	//	}
-	//case RemoteKubeProxy:
-	//	// kubernetes is not configured, reject the connection
-	//	if a.KubeDialAddr.IsEmpty() {
-	//		req.Reply(false, []byte("connection rejected: configure kubernetes proxy for this cluster."))
-	//		return
-	//	}
-	//	servers = append(servers, a.KubeDialAddr.Addr)
-	//default:
-	//	servers = append(servers, server)
-	//}
-
-	//a.Debugf("Received out-of-band proxy transport request: %v", servers)
-
-	//var conn net.Conn
-	//var err error
-
-	//// loop over all servers and try and connect to one of them
-	//for _, s := range servers {
-	//	conn, err = net.Dial("tcp", s)
-	//	if err == nil {
-	//		break
-	//	}
-
-	//	// log the reason we were not able to connect
-	//	a.Debugf(trace.DebugReport(err))
-	//}
-
-	//// if we were not able to connect to any server, write the last connection
-	//// error to stderr of the caller (via SSH channel) so the error will be
-	//// propagated all the way back to the client (most likely tsh)
-	//if err != nil {
-	//	fmt.Fprint(ch.Stderr(), err.Error())
-	//	req.Reply(false, []byte(err.Error()))
-	//	return
-	//}
-
-	//if conn == nil {
-	//	a.Warningf("No error, but conn is nil: %v", conn)
-	//}
-
-	//// successfully dialed
-	//req.Reply(true, []byte("connected"))
-	//a.Debugf("Successfully dialed to %v, start proxying.", server)
-
-	//wg := sync.WaitGroup{}
-	//wg.Add(2)
-
-	//go func() {
-	//	defer wg.Done()
-	//	// make sure that we close the client connection on a channel
-	//	// close, otherwise the other goroutine would never know
-	//	// as it will block on read from the connection
-	//	defer conn.Close()
-	//	io.Copy(conn, ch)
-	//}()
-
-	//go func() {
-	//	defer wg.Done()
-	//	io.Copy(ch, conn)
-	//}()
-
-	//wg.Wait()
-
+	// Hand connection off to the SSH server.
+	a.AgentConfig.CH.HandleConnection(utils.NewChConn(sconn, ch))
 }
 
 // proxyTransport runs as a goroutine running inside a reverse tunnel client
@@ -551,7 +332,7 @@ func (a *Agent) proxyNodeTransport(sconn ssh.Conn, ch ssh.Channel, reqC <-chan *
 // ch   : SSH channel which received "teleport-transport" out-of-band request
 // reqC : request payload
 func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
-	a.Debugf("proxyTransport")
+	a.log.Debugf("proxyTransport")
 	defer ch.Close()
 
 	// always push space into stderr to make sure the caller can always
@@ -570,7 +351,7 @@ func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 			return
 		}
 	case <-time.After(defaults.DefaultDialTimeout):
-		a.Warningf("timeout waiting for dial")
+		a.log.Warnf("timeout waiting for dial")
 		return
 	}
 
@@ -584,11 +365,11 @@ func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 	case RemoteAuthServer:
 		authServers, err := a.Client.GetAuthServers()
 		if err != nil {
-			a.Warningf("Unable retrieve list of remote Auth Servers: %v.", err)
+			a.log.Warnf("Unable retrieve list of remote Auth Servers: %v.", err)
 			return
 		}
 		if len(authServers) == 0 {
-			a.Warningf("No remote Auth Servers returned by client.")
+			a.log.Warnf("No remote Auth Servers returned by client.")
 			return
 		}
 		for _, as := range authServers {
@@ -605,7 +386,7 @@ func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 		servers = append(servers, server)
 	}
 
-	a.Debugf("Received out-of-band proxy transport request: %v", servers)
+	a.log.Debugf("Received out-of-band proxy transport request: %v", servers)
 
 	var conn net.Conn
 	var err error
@@ -618,7 +399,7 @@ func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 		}
 
 		// log the reason we were not able to connect
-		a.Debugf(trace.DebugReport(err))
+		a.log.Debugf(trace.DebugReport(err))
 	}
 
 	// if we were not able to connect to any server, write the last connection
@@ -631,12 +412,12 @@ func (a *Agent) proxyTransport(ch ssh.Channel, reqC <-chan *ssh.Request) {
 	}
 
 	if conn == nil {
-		a.Warningf("No error, but conn is nil: %v", conn)
+		a.log.Warnf("No error, but conn is nil: %v", conn)
 	}
 
 	// successfully dialed
 	req.Reply(true, []byte("connected"))
-	a.Debugf("Successfully dialed to %v, start proxying.", server)
+	a.log.Debugf("Successfully dialed to %v, start proxying.", server)
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
@@ -678,7 +459,7 @@ func (a *Agent) run() {
 	// Try and connect to remote cluster.
 	conn, err := a.connect()
 	if err != nil || conn == nil {
-		a.Warningf("Failed to create remote tunnel: %v, conn: %v.", err, conn)
+		a.log.Warnf("Failed to create remote tunnel: %v, conn: %v.", err, conn)
 		return
 	}
 
@@ -688,7 +469,7 @@ func (a *Agent) run() {
 		// If not connected to a proxy in the discover list (which means we
 		// connected to a proxy we already have a connection to), try again.
 		if !a.connectedToRightProxy() {
-			a.Debugf("Missed, connected to %v instead of %v.", a.getPrincipalsList(), Proxies(a.DiscoverProxies))
+			a.log.Debugf("Missed, connected to %v instead of %v.", a.getPrincipalsList(), Proxies(a.DiscoverProxies))
 
 			conn.Close()
 			return
@@ -715,7 +496,7 @@ func (a *Agent) run() {
 	// or permanent loss of a proxy.
 	err = a.processRequests(conn)
 	if err != nil {
-		a.Warnf("Unable to continue processesing requests: %v.", err)
+		a.log.Warnf("Unable to continue processesing requests: %v.", err)
 		return
 	}
 }
@@ -735,10 +516,10 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	newTransportC := conn.HandleChannelOpen(chanTransport)
-	newDiscoveryC := conn.HandleChannelOpen(chanDiscovery)
 
-	newNodeTransportCh := conn.HandleChannelOpen("teleport-transport-node")
+	newTransportC := conn.HandleChannelOpen(chanTransport)
+	newNodeTransportCh := conn.HandleChannelOpen(chanTransportNode)
+	newDiscoveryC := conn.HandleChannelOpen(chanDiscovery)
 
 	// send first ping right away, then start a ping timer:
 	hb.SendRequest("ping", false, nil)
@@ -756,7 +537,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 				a.Error(err)
 				return trace.Wrap(err)
 			}
-			a.Debugf("ping -> %v", conn.RemoteAddr())
+			a.log.Debugf("ping -> %v", conn.RemoteAddr())
 		// ssh channel closed:
 		case req := <-reqC:
 			if req == nil {
@@ -768,23 +549,22 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 			if nch == nil {
 				continue
 			}
-			a.Debugf("transport request: %v", nch.ChannelType())
+			a.log.Debugf("transport request: %v", nch.ChannelType())
 			ch, req, err := nch.Accept()
 			if err != nil {
-				a.Warningf("failed to accept request: %v", err)
+				a.log.Warnf("failed to accept request: %v", err)
 				continue
 			}
 			go a.proxyTransport(ch, req)
-		//
+		// Node transport request.
 		case nch := <-newNodeTransportCh:
-			fmt.Printf("--> NEW NODE TRANSPORT CH\n")
 			if nch == nil {
 				continue
 			}
-			a.Debugf("Node transport request: %v", nch.ChannelType())
+			a.log.Debugf("Node transport request: %v.", nch.ChannelType())
 			ch, req, err := nch.Accept()
 			if err != nil {
-				a.Warningf("failed to accept request: %v", err)
+				a.log.Warnf("Failed to accept %v request: %v", nch.ChannelType(), err)
 				continue
 			}
 			go a.proxyNodeTransport(conn.Conn, ch, req)
@@ -793,10 +573,10 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 			if nch == nil {
 				continue
 			}
-			a.Debugf("discovery request: %v", nch.ChannelType())
+			a.log.Debugf("discovery request: %v", nch.ChannelType())
 			ch, req, err := nch.Accept()
 			if err != nil {
-				a.Warningf("failed to accept request: %v", err)
+				a.log.Warnf("failed to accept request: %v", err)
 				continue
 			}
 			go a.handleDiscovery(ch, req)
@@ -811,7 +591,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 // ch   : SSH channel which received "teleport-transport" out-of-band request
 // reqC : request payload
 func (a *Agent) handleDiscovery(ch ssh.Channel, reqC <-chan *ssh.Request) {
-	a.Debugf("handleDiscovery")
+	a.log.Debugf("handleDiscovery")
 	defer ch.Close()
 
 	for {
@@ -827,7 +607,7 @@ func (a *Agent) handleDiscovery(ch ssh.Channel, reqC <-chan *ssh.Request) {
 			}
 			r, err := unmarshalDiscoveryRequest(req.Payload)
 			if err != nil {
-				a.Warningf("bad payload: %v", err)
+				a.log.Warnf("bad payload: %v", err)
 				return
 			}
 			r.ClusterAddr = a.Addr
