@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -76,7 +77,8 @@ type AgentPoolConfig struct {
 	// KubeDialAddr is an address of a kubernetes proxy
 	KubeDialAddr utils.NetAddr
 	//
-	CH ConnHandler
+	CH        ConnHandler
+	Component string
 }
 
 // CheckAndSetDefaults checks and sets defaults
@@ -176,7 +178,7 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 	defer m.Unlock()
 
 	matchKey := req.key()
-	fmt.Printf("--> tryDiscover: matchKey: %v.\n", matchKey)
+	//fmt.Printf("--> tryDiscover: matchKey: %v.\n", matchKey)
 
 	// if one of the proxies have been discovered or connected to
 	// remove proxy from discovery request
@@ -188,7 +190,10 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 			filtered = append(filtered, proxy)
 		}
 	}
-	m.Debugf("tryDiscover original(%v) -> filtered(%v)", proxies, filtered)
+
+	//fmt.Printf("--> tryDiscover: original: %v, filtered: %v.\n", proxies, filtered)
+	//m.Debugf("tryDiscover original(%v) -> filtered(%v)", proxies, filtered)
+
 	// nothing to do
 	if len(filtered) == 0 {
 		return
@@ -202,6 +207,7 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 		}
 		if filtered.Equal(agent.DiscoverProxies) {
 			foundAgent = true
+			//fmt.Printf("--> tryDiscover: found agent already attempting to discover.\n")
 			agent.log.Debugf("agent is already discovering the same proxies as requested in %v", filtered)
 			return false
 		}
@@ -211,6 +217,7 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 
 	// if we haven't found any discovery agent
 	if !foundAgent {
+		//fmt.Printf("--> tryDiscover: adding agent for %v.\n", req.key())
 		m.addAgent(req.key(), req.Proxies)
 	}
 }
@@ -218,7 +225,7 @@ func (m *AgentPool) tryDiscover(req discoveryRequest) {
 // FetchAndSyncAgents executes one time fetch and sync request
 // (used in tests instead of polling)
 func (m *AgentPool) FetchAndSyncAgents() error {
-	fmt.Printf("--> FetchAndSyncAgents.\n")
+	//fmt.Printf("--> FetchAndSyncAgents.\n")
 	tunnels, err := m.cfg.AccessPoint.GetReverseTunnels()
 	if err != nil {
 		return trace.Wrap(err)
@@ -258,6 +265,7 @@ func filterAndClose(agents []*Agent, matchAgent matchAgentFn) []*Agent {
 	for i := range agents {
 		agent := agents[i]
 		if matchAgent(agent) {
+			debug.PrintStack()
 			agent.log.Debugf("Pool is closing agent.")
 			agent.Close()
 		} else {
@@ -376,12 +384,34 @@ func (m *AgentPool) syncAgents(tunnels []services.ReverseTunnel) error {
 	m.Lock()
 	defer m.Unlock()
 
-	keys, err := tunnelsToAgentKeys(tunnels)
+	filtered := make([]services.ReverseTunnel, 0, len(tunnels))
+	switch m.cfg.Component {
+	case teleport.ComponentProxy:
+		for _, t := range tunnels {
+			if t.GetType() == services.ProxyTunnel {
+				filtered = append(filtered, t)
+			}
+		}
+	case teleport.ComponentNode:
+		for _, t := range tunnels {
+			if t.GetName() == m.cfg.HostUUID {
+				filtered = append(filtered, t)
+			}
+		}
+		//filtered = tunnels
+	}
+
+	fmt.Printf("--> syncAgents: I'm : %v.\n", m.cfg.HostUUID)
+	fmt.Printf("--> syncAgents: tunnels: %v.\n", filtered)
+
+	keys, err := tunnelsToAgentKeys(filtered)
 	if err != nil {
 		return trace.Wrap(err)
 	}
 
+	// THIS IS WHAT IS BROKEN and "why Pool is closing agent." it returns an agents to remove.
 	agentsToAdd, agentsToRemove := diffTunnels(m.agents, keys)
+
 	// remove agents from deleted reverse tunnels
 	for _, key := range agentsToRemove {
 		m.closeAgents(&key)

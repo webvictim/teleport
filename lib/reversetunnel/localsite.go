@@ -292,6 +292,7 @@ func (s *localSite) registerHeartbeat(nodeID string, t time.Time) {
 	tunnelConn.SetLastHeartbeat(t)
 	tunnelConn.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
 
+	fmt.Printf("--> localSite: registerHeartbeat: UpsertTunnelConnection.\n")
 	err = s.accessPoint.UpsertTunnelConnection(tunnelConn)
 	if err != nil {
 		s.log.Warnf("Failed to register heartbeat for %v: %v.", nodeID, err)

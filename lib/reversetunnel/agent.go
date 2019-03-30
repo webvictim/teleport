@@ -234,6 +234,7 @@ func (a *Agent) Wait() error {
 func (a *Agent) connectedTo(proxy services.Server) bool {
 	principals := a.getPrincipals()
 	proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), a.RemoteCluster)
+	fmt.Printf("--> connected to: %v, checking if %v in list.\n", a.getPrincipals(), proxyID)
 	if _, ok := principals[proxyID]; ok {
 		return true
 	}

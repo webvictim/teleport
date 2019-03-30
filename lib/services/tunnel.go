@@ -25,10 +25,10 @@ type ReverseTunnel interface {
 	// SetClusterName sets cluster name
 	SetClusterName(name string)
 
-	// GetTunnelType gets the type of ReverseTunnel.
-	GetTunnelType() TunnelType
-	// SetTunnelType sets the type of ReverseTunnel.
-	SetTunnelType(TunnelType)
+	// GetType gets the type of ReverseTunnel.
+	GetType() TunnelType
+	// SetType sets the type of ReverseTunnel.
+	SetType(TunnelType)
 
 	// GetDialAddrs returns list of dial addresses for this cluster
 	GetDialAddrs() []string
@@ -145,13 +145,16 @@ func (r *ReverseTunnelV2) GetClusterName() string {
 	return r.Spec.ClusterName
 }
 
-// GetTunnelType gets the type of ReverseTunnel.
-func (r *ReverseTunnelV2) GetTunnelType() TunnelType {
+// GetType gets the type of ReverseTunnel.
+func (r *ReverseTunnelV2) GetType() TunnelType {
+	if string(r.Spec.Type) == "" {
+		return ProxyTunnel
+	}
 	return r.Spec.Type
 }
 
-// SetTunnelType sets the type of ReverseTunnel.
-func (r *ReverseTunnelV2) SetTunnelType(tt TunnelType) {
+// SetType sets the type of ReverseTunnel.
+func (r *ReverseTunnelV2) SetType(tt TunnelType) {
 	r.Spec.Type = tt
 }
 
@@ -189,7 +192,7 @@ type ReverseTunnelSpecV2 struct {
 	ClusterName string `json:"cluster_name"`
 
 	// Type is the type of ReverseTunnel.
-	Type TunnelType `json:"tunnel_type"`
+	Type TunnelType `json:"tunnel_type,omitempty"`
 
 	// DialAddrs is a list of remote address to establish a connection to
 	// it's always SSH over TCP

@@ -1242,35 +1242,6 @@ func (process *TeleportProcess) initSSH() error {
 			return trace.Wrap(err)
 		}
 
-		//// Keep upserting this with a ttl.
-		//reverseTunnel := services.NewReverseTunnel("example.com", []string{
-		//	"localhost:3024",
-		//})
-		//reverseTunnel.SetTunnelType(services.NodeTunnel)
-		//err = conn.Client.UpsertReverseTunnel(reverseTunnel)
-		//if err != nil {
-		//	return trace.Wrap(err)
-		//}
-
-		//agentPool, err := reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
-		//	HostUUID:    conn.ServerIdentity.ID.HostUUID,
-		//	Client:      conn.Client,
-		//	AccessPoint: authClient,
-		//	HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
-		//	Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
-		//	//KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),
-		//})
-		//if err != nil {
-		//	return trace.Wrap(err)
-		//}
-		//process.RegisterCriticalFunc("proxy.reversetunnel.agent", func() error {
-		//	if err := agentPool.Start(); err != nil {
-		//		return trace.Wrap(err)
-		//	}
-		//	agentPool.Wait()
-		//	return nil
-		//})
-
 		//listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
 		//if err != nil {
 		//	return trace.Wrap(err)
@@ -1311,11 +1282,11 @@ func (process *TeleportProcess) initSSH() error {
 		}
 
 		// Keep upserting this with a ttl.
-		reverseTunnel := services.NewReverseTunnel("example.com", []string{
-			//	"localhost:3024",
-			"localhost:2024",
+		//reverseTunnel := services.NewReverseTunnel("example.com", []string{
+		reverseTunnel := services.NewReverseTunnel(conn.ServerIdentity.ID.HostUUID, []string{
+			"localhost:2024", // "localhost:3024",
 		})
-		reverseTunnel.SetTunnelType(services.NodeTunnel)
+		reverseTunnel.SetType(services.NodeTunnel)
 		err = conn.Client.UpsertReverseTunnel(reverseTunnel)
 		if err != nil {
 			return trace.Wrap(err)
@@ -1329,26 +1300,28 @@ func (process *TeleportProcess) initSSH() error {
 			HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
 			Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 			//KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),
-			CH: s,
+			Component: teleport.ComponentNode,
+			CH:        s,
 		})
 		if err != nil {
 			return trace.Wrap(err)
 		}
-		process.RegisterCriticalFunc("proxy.reversetunnel.agent", func() error {
-			fmt.Printf("--> Creating and starting agent pool.\n")
-			if err := agentPool.Start(); err != nil {
-				return trace.Wrap(err)
-			}
-			agentPool.Wait()
-			return nil
-		})
+		//process.RegisterCriticalFunc("proxy.reversetunnel.agent", func() error {
+		fmt.Printf("--> Creating and starting agent pool.\n")
+		if err := agentPool.Start(); err != nil {
+			return trace.Wrap(err)
+		}
+		process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+		agentPool.Wait()
+		//	return nil
+		//})
 
 		//log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
 		//utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
 		//go s.Serve(listener)
 
 		//// broadcast that the node has started
-		process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+		//process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
 
 		//// block and wait while the node is running
 		//s.Wait()
@@ -1801,6 +1774,7 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 		HostSigners:  []ssh.Signer{conn.ServerIdentity.KeySigner},
 		Cluster:      conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 		KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),
+		Component:    teleport.ComponentProxy,
 	})
 	if err != nil {
 		return trace.Wrap(err)
