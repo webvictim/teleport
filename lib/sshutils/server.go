@@ -343,7 +343,7 @@ func (s *Server) acceptConnections() {
 				s.Debugf("Backoff on network error: %v.", err)
 			}
 		} else {
-			go s.handleConnection(conn)
+			go s.HandleConnection(conn)
 		}
 	}
 }
@@ -352,13 +352,13 @@ func (s *Server) trackConnections(delta int32) int32 {
 	return atomic.AddInt32(&s.conns, delta)
 }
 
-// handleConnection is called every time an SSH server accepts a new
+// HandleConnection is called every time an SSH server accepts a new
 // connection from a client.
 //
 // this is the foundation of all SSH connections in Teleport (between clients
 // and proxies, proxies and servers, servers and auth, etc).
 //
-func (s *Server) handleConnection(conn net.Conn) {
+func (s *Server) HandleConnection(conn net.Conn) {
 	s.trackConnections(1)
 	defer s.trackConnections(-1)
 	// initiate an SSH connection, note that we don't need to close the conn here

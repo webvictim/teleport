@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
+	//"strconv"
 	"strings"
 	"sync"
 
@@ -261,41 +261,45 @@ func (t *proxySubsys) proxyToHost(
 		}
 	}
 
-	// if port is 0, it means the client wants us to figure out
-	// which port to use
-	specifiedPort := len(t.port) > 0 && t.port != "0"
-	ips, _ := net.LookupHost(t.host)
-	t.log.Debugf("proxy connecting to host=%v port=%v, exact port=%v", t.host, t.port, specifiedPort)
+	fmt.Printf("--> servers> %v.\n", servers)
 
-	// enumerate and try to find a server with self-registered with a matching name/IP:
-	var server services.Server
-	for i := range servers {
-		ip, port, err := net.SplitHostPort(servers[i].GetAddr())
-		if err != nil {
-			t.log.Error(err)
-			continue
-		}
+	//// if port is 0, it means the client wants us to figure out
+	//// which port to use
+	//specifiedPort := len(t.port) > 0 && t.port != "0"
+	//ips, _ := net.LookupHost(t.host)
+	//t.log.Debugf("proxy connecting to host=%v port=%v, exact port=%v", t.host, t.port, specifiedPort)
 
-		if t.host == ip || t.host == servers[i].GetHostname() || utils.SliceContainsStr(ips, ip) {
-			if !specifiedPort || t.port == port {
-				server = servers[i]
-				break
-			}
-		}
-	}
+	//// enumerate and try to find a server with self-registered with a matching name/IP:
+	//var server services.Server
+	//for i := range servers {
+	//	ip, port, err := net.SplitHostPort(servers[i].GetAddr())
+	//	if err != nil {
+	//		t.log.Error(err)
+	//		continue
+	//	}
 
-	// Resolve the IP address to dial to because the hostname may not be
-	// DNS resolvable.
-	var serverAddr string
-	if server != nil {
-		serverAddr = server.GetAddr()
-	} else {
-		if !specifiedPort {
-			t.port = strconv.Itoa(defaults.SSHServerListenPort)
-		}
-		serverAddr = net.JoinHostPort(t.host, t.port)
-		t.log.Warnf("server lookup failed: using default=%v", serverAddr)
-	}
+	//	if t.host == ip || t.host == servers[i].GetHostname() || utils.SliceContainsStr(ips, ip) {
+	//		if !specifiedPort || t.port == port {
+	//			server = servers[i]
+	//			break
+	//		}
+	//	}
+	//}
+
+	//// Resolve the IP address to dial to because the hostname may not be
+	//// DNS resolvable.
+	//var serverAddr string
+	//if server != nil {
+	//	serverAddr = server.GetAddr()
+	//} else {
+	//	if !specifiedPort {
+	//		t.port = strconv.Itoa(defaults.SSHServerListenPort)
+	//	}
+	//	serverAddr = net.JoinHostPort(t.host, t.port)
+	//	t.log.Warnf("server lookup failed: using default=%v", serverAddr)
+	//}
+
+	fmt.Printf("--> here dialing from site: %#v!\n", site)
 
 	// Pass the agent along to the site. If the proxy is in recording mode, this
 	// agent is used to perform user authentication. Pass the DNS name to the
@@ -303,13 +307,15 @@ func (t *proxySubsys) proxyToHost(
 	// with the correct hostname).
 	toAddr := &utils.NetAddr{
 		AddrNetwork: "tcp",
-		Addr:        serverAddr,
+		//Addr:        serverAddr,
+		Addr: "foo.example.com:1234",
 	}
 	conn, err := site.Dial(reversetunnel.DialParams{
-		From:      remoteAddr,
-		To:        toAddr,
-		UserAgent: t.agent,
-		Address:   t.host,
+		From:             remoteAddr,
+		To:               toAddr,
+		UserAgent:        t.agent,
+		Address:          t.host,
+		UseReverseTunnel: true,
 	})
 	if err != nil {
 		return trace.Wrap(err)

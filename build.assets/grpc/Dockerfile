@@ -1,4 +1,4 @@
-FROM golang:1.7-wheezy
+FROM golang:latest
 
 ARG PROTOC_VER
 ARG GOGO_PROTO_TAG

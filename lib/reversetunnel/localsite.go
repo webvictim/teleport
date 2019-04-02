@@ -18,19 +18,26 @@ package reversetunnel
 
 import (
 	"fmt"
+	//"io/ioutil"
 	"net"
+	//"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv/forward"
+	//"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/teleport/lib/utils/proxy"
 
 	"github.com/gravitational/trace"
-	log "github.com/sirupsen/logrus"
+
+	"github.com/jonboulle/clockwork"
+	"github.com/sirupsen/logrus"
 )
 
 func newlocalSite(srv *server, domainName string, client auth.ClientI) (*localSite, error) {
@@ -54,7 +61,9 @@ func newlocalSite(srv *server, domainName string, client auth.ClientI) (*localSi
 		accessPoint:      accessPoint,
 		certificateCache: certificateCache,
 		domainName:       domainName,
-		log: log.WithFields(log.Fields{
+		remoteConns:      make(map[string]*remoteConn),
+		clock:            clockwork.NewRealClock(),
+		log: logrus.WithFields(logrus.Fields{
 			trace.Component: teleport.ComponentReverseTunnelServer,
 			trace.ComponentFields: map[string]string{
 				"cluster": domainName,
@@ -70,8 +79,9 @@ func newlocalSite(srv *server, domainName string, client auth.ClientI) (*localSi
 type localSite struct {
 	sync.Mutex
 
+	log *logrus.Entry
+
 	authServer  string
-	log         *log.Entry
 	domainName  string
 	connections []*remoteConn
 	lastUsed    int
@@ -85,6 +95,10 @@ type localSite struct {
 
 	// certificateCache caches host certificates for the forwarding server.
 	certificateCache *certificateCache
+
+	remoteConns map[string]*remoteConn
+
+	clock clockwork.Clock
 }
 
 // GetTunnelsCount always returns 1 for local cluster
@@ -141,13 +155,20 @@ func (s *localSite) Dial(params DialParams) (net.Conn, error) {
 		return nil, trace.Wrap(err)
 	}
 
+	// If reverse tunnel use is requested (server heartbeat back indicating
+	// that it connected via a reverse tunnel) then build a connection over the
+	// reverse tunnel instead of dailing.
+	if params.UseReverseTunnel {
+		return s.chanTransportConn(params.Address)
+	}
+
 	clusterConfig, err := s.accessPoint.GetClusterConfig()
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
-	// if the proxy is in recording mode use the agent to dial and build a
-	// in-memory forwarding server
+	// If the proxy is in recording mode use the agent to dial and build a
+	// in-memory forwarding server.
 	if clusterConfig.GetSessionRecording() == services.RecordAtProxy {
 		if params.UserAgent == nil {
 			return nil, trace.BadParameter("user agent missing")
@@ -216,18 +237,92 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 	return conn, nil
 }
 
-func findServer(addr string, servers []services.Server) (services.Server, error) {
-	for i := range servers {
-		srv := servers[i]
-		_, port, err := net.SplitHostPort(srv.GetAddr())
-		if err != nil {
-			log.Warningf("server %v(%v) has incorrect address format (%v)",
-				srv.GetAddr(), srv.GetHostname(), err.Error())
-		} else {
-			if (len(srv.GetHostname()) != 0) && (len(port) != 0) && (addr == srv.GetHostname()+":"+port || addr == srv.GetAddr()) {
-				return srv, nil
+func (s *localSite) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, newChannel ssh.NewChannel) {
+	nodeID := sconn.Permissions.Extensions[extHost]
+	rconn := s.addConn("example.com", conn, sconn)
+
+	_, requestCh, err := newChannel.Accept()
+	if err != nil {
+		s.log.Errorf("Failed to accept channel for %v: %v.", rconn.domain, err)
+		sconn.Close()
+		return
+	}
+
+	for {
+		select {
+		case req := <-requestCh:
+			if req == nil {
+				s.log.Infof("Cluster agent for %v disconnected.", rconn.domain)
+				rconn.markInvalid(trace.ConnectionProblem(nil, "agent disconnected"))
+
+				// Add back later.
+				//if !s.hasValidConnections() {
+				//	s.deleteConnectionRecord()
+				//}
+				return
 			}
+
+			var timeSent time.Time
+			var roundtrip time.Duration
+			if req.Payload != nil {
+				if err := timeSent.UnmarshalText(req.Payload); err == nil {
+					roundtrip = s.srv.Clock.Now().Sub(timeSent)
+				}
+			}
+			if roundtrip != 0 {
+				logrus.WithFields(logrus.Fields{"latency": roundtrip}).Debugf("ping <- %v", rconn.conn.RemoteAddr())
+			} else {
+				s.log.Debugf("ping <- %v", rconn.conn.RemoteAddr())
+			}
+			go s.registerHeartbeat(nodeID, time.Now())
 		}
 	}
-	return nil, trace.NotFound("server %v is unknown", addr)
+
+}
+
+func (s *localSite) registerHeartbeat(nodeID string, t time.Time) {
+	tunnelConn, err := services.NewTunnelConnection(
+		fmt.Sprintf("%v-%v", s.srv.ID, s.domainName),
+		services.TunnelConnectionSpecV2{
+			ClusterName:   s.domainName,
+			ProxyName:     s.srv.ID,
+			LastHeartbeat: s.clock.Now().UTC(),
+		},
+	)
+	tunnelConn.SetLastHeartbeat(t)
+	tunnelConn.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
+
+	fmt.Printf("--> localSite: registerHeartbeat: UpsertTunnelConnection.\n")
+	err = s.accessPoint.UpsertTunnelConnection(tunnelConn)
+	if err != nil {
+		s.log.Warnf("Failed to register heartbeat for %v: %v.", nodeID, err)
+	}
+}
+
+func (s *localSite) addConn(nodeID string, conn net.Conn, sconn ssh.Conn) *remoteConn {
+	s.Lock()
+	defer s.Unlock()
+
+	rconn := newRemoteConn(conn, sconn, s.accessPoint, nodeID, s.srv.ID)
+	//s.remoteConns[nodeID] = rconn
+	s.remoteConns["server03"] = rconn
+
+	return rconn
+}
+
+func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
+	s.log.Debugf("Connecting to %v through tunnel.", addr)
+	//rconn, ok := s.remoteConns[addr]
+	rconn, ok := s.remoteConns["server03"]
+	if !ok {
+		return nil, trace.BadParameter("no reverse tunnel for %v found", addr)
+	}
+
+	channel, err := rconn.OpenChannel(chanTransportNode, nil)
+	if err != nil {
+		rconn.markInvalid(err)
+		return nil, trace.Wrap(err)
+	}
+
+	return rconn.ChannelConn(channel), nil
 }

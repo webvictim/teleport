@@ -1305,6 +1305,8 @@ func (process *TeleportProcess) initSSH() error {
 		trace.Component: teleport.Component(teleport.ComponentNode, process.id),
 	})
 
+	var agentPool *reversetunnel.AgentPool
+
 	process.RegisterCriticalFunc("ssh.node", func() error {
 		var event Event
 		select {
@@ -1343,12 +1345,12 @@ func (process *TeleportProcess) initSSH() error {
 			return trace.Wrap(err)
 		}
 
-		listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		// clean up unused descriptors passed for proxy, but not used by it
-		warnOnErr(process.closeImportedDescriptors(teleport.ComponentNode))
+		//listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
+		//if err != nil {
+		//	return trace.Wrap(err)
+		//}
+		//// clean up unused descriptors passed for proxy, but not used by it
+		//warnOnErr(process.closeImportedDescriptors(teleport.ComponentNode))
 
 		s, err = regular.New(cfg.SSH.Addr,
 			cfg.Hostname,
@@ -1382,20 +1384,58 @@ func (process *TeleportProcess) initSSH() error {
 			}
 		}
 
-		log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
-		utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
-		go s.Serve(listener)
+		// Keep upserting this with a ttl.
+		//reverseTunnel := services.NewReverseTunnel("example.com", []string{
+		reverseTunnel := services.NewReverseTunnel(conn.ServerIdentity.ID.HostUUID, []string{
+			"localhost:2024", // "localhost:3024",
+		})
+		reverseTunnel.SetType(services.NodeTunnel)
+		err = conn.Client.UpsertReverseTunnel(reverseTunnel)
+		if err != nil {
+			return trace.Wrap(err)
+		}
 
-		// broadcast that the node has started
+		agentPool, err = reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
+			HostUUID:    conn.ServerIdentity.ID.HostUUID,
+			Client:      conn.Client,
+			AccessPoint: conn.Client,
+			//AccessPoint: authClient,
+			HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
+			Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
+			//KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),
+			Component: teleport.ComponentNode,
+			CH:        s,
+		})
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		//process.RegisterCriticalFunc("proxy.reversetunnel.agent", func() error {
+		fmt.Printf("--> Creating and starting agent pool.\n")
+		if err := agentPool.Start(); err != nil {
+			return trace.Wrap(err)
+		}
 		process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+		agentPool.Wait()
+		//	return nil
+		//})
 
-		// block and wait while the node is running
-		s.Wait()
+		//log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
+		//utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
+		//go s.Serve(listener)
+
+		//// broadcast that the node has started
+		//process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+
+		//// block and wait while the node is running
+		//s.Wait()
+
 		log.Infof("Exited.")
 		return nil
 	})
 	// execute this when process is asked to exit:
 	process.onExit("ssh.shutdown", func(payload interface{}) {
+		fmt.Printf("--> Stopping agent pool.\n")
+		agentPool.Stop()
 		if payload == nil {
 			log.Infof("Shutting down immediately.")
 			if s != nil {
@@ -1835,6 +1875,7 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 		HostSigners:  []ssh.Signer{conn.ServerIdentity.KeySigner},
 		Cluster:      conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 		KubeDialAddr: utils.DialAddrFromListenAddr(cfg.Proxy.Kube.ListenAddr),
+		Component:    teleport.ComponentProxy,
 	})
 	if err != nil {
 		return trace.Wrap(err)
@@ -1994,6 +2035,7 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 			trace.Component: teleport.Component(teleport.ComponentReverseTunnelAgent, process.id),
 		})
 		log.Infof("Starting reverse tunnel agent pool.")
+		fmt.Printf("--> Starting proxy agent pool.\n")
 		if err := agentPool.Start(); err != nil {
 			log.Errorf("Failed to start: %v.", err)
 			return trace.Wrap(err)

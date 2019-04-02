@@ -251,6 +251,10 @@ func (s *Server) Wait() {
 	s.srv.Wait(context.TODO())
 }
 
+func (s *Server) HandleConnection(conn net.Conn) {
+	s.srv.HandleConnection(conn)
+}
+
 // RotationGetter returns rotation state
 type RotationGetter func(role teleport.Role) (*services.Rotation, error)
 
