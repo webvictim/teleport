@@ -207,9 +207,9 @@ func (cfg *Config) CheckAndSetDefaults() error {
 	if cfg.Clock == nil {
 		cfg.Clock = clockwork.NewRealClock()
 	}
-	if cfg.Component == "" {
-		cfg.Component = teleport.Component(teleport.ComponentProxy, teleport.ComponentServer)
-	}
+	//if cfg.Component == "" {
+	//	cfg.Component = teleport.Component(teleport.ComponentProxy, teleport.ComponentServer)
+	//}
 	return nil
 }
 

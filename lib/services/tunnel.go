@@ -217,7 +217,7 @@ const ReverseTunnelSpecV2Schema = `{
   "required": ["cluster_name", "dial_addrs"],
   "properties": {
     "cluster_name": {"type": "string"},
-    "tunnel_type": {"type": "string"},
+    "type": {"type": "string"},
     "dial_addrs": {
       "type": "array",
       "items": {

@@ -239,7 +239,7 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 
 func (s *localSite) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, newChannel ssh.NewChannel) {
 	nodeID := sconn.Permissions.Extensions[extHost]
-	rconn := s.addConn("example.com", conn, sconn)
+	rconn := s.addConn(nodeID, conn, sconn)
 
 	_, requestCh, err := newChannel.Accept()
 	if err != nil {
@@ -255,7 +255,6 @@ func (s *localSite) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, newCha
 				s.log.Infof("Cluster agent for %v disconnected.", rconn.domain)
 				rconn.markInvalid(trace.ConnectionProblem(nil, "agent disconnected"))
 
-				// Add back later.
 				//if !s.hasValidConnections() {
 				//	s.deleteConnectionRecord()
 				//}
@@ -292,7 +291,7 @@ func (s *localSite) registerHeartbeat(nodeID string, t time.Time) {
 	tunnelConn.SetLastHeartbeat(t)
 	tunnelConn.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
 
-	fmt.Printf("--> localSite: registerHeartbeat: UpsertTunnelConnection.\n")
+	//fmt.Printf("--> localSite: registerHeartbeat: UpsertTunnelConnection.\n")
 	err = s.accessPoint.UpsertTunnelConnection(tunnelConn)
 	if err != nil {
 		s.log.Warnf("Failed to register heartbeat for %v: %v.", nodeID, err)
@@ -304,8 +303,8 @@ func (s *localSite) addConn(nodeID string, conn net.Conn, sconn ssh.Conn) *remot
 	defer s.Unlock()
 
 	rconn := newRemoteConn(conn, sconn, s.accessPoint, nodeID, s.srv.ID)
-	//s.remoteConns[nodeID] = rconn
-	s.remoteConns["server03"] = rconn
+	s.remoteConns[nodeID] = rconn
+	//s.remoteConns["server03"] = rconn
 
 	return rconn
 }
@@ -326,3 +325,22 @@ func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
 
 	return rconn.ChannelConn(channel), nil
 }
+
+//func (s *remoteSite) hasValidConnections() bool {
+//	s.RLock()
+//	defer s.RUnlock()
+//
+//	for _, conn := range s.connections {
+//		if !conn.isInvalid() {
+//			return true
+//		}
+//	}
+//	return false
+//}
+//
+//
+//// deleteConnectionRecord deletes connection record to let know peer proxies
+//// that this node lost the connection and needs to be discovered
+//func (s *remoteSite) deleteConnectionRecord() {
+//	s.localAccessPoint.DeleteTunnelConnection(s.connInfo.GetClusterName(), s.connInfo.GetName())
+//}

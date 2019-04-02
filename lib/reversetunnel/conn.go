@@ -271,7 +271,9 @@ func (c *remoteConn) findDisconnectedProxies() ([]services.Server, error) {
 		}
 	}
 
-	fmt.Printf("--> findDisconnectedProxies: missing: %v.\n", missing)
+	if len(missing) > 0 {
+		fmt.Printf("--> findDisconnectedProxies: missing: %v.\n", missing)
+	}
 	return missing, nil
 }
 
@@ -279,6 +281,7 @@ func (c *remoteConn) findDisconnectedProxies() ([]services.Server, error) {
 func (c *remoteConn) sendDiscoveryRequests(req discoveryRequest) error {
 	discoveryCh, err := c.openDiscoveryChannel()
 	if err != nil {
+		fmt.Printf("--> failed to open discovery 1: %v.\n", err)
 		return trace.Wrap(err)
 	}
 
@@ -290,6 +293,7 @@ func (c *remoteConn) sendDiscoveryRequests(req discoveryRequest) error {
 	}
 	_, err = discoveryCh.SendRequest("discovery", false, payload)
 	if err != nil {
+		fmt.Printf("--> failed to open discovery 2: %v.\n", err)
 		c.markInvalid(err)
 		return trace.Wrap(err)
 	}

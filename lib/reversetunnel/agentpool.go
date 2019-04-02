@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"runtime/debug"
+	//"runtime/debug"
 	"sync"
 	"time"
 
@@ -265,7 +265,7 @@ func filterAndClose(agents []*Agent, matchAgent matchAgentFn) []*Agent {
 	for i := range agents {
 		agent := agents[i]
 		if matchAgent(agent) {
-			debug.PrintStack()
+			//debug.PrintStack()
 			agent.log.Debugf("Pool is closing agent.")
 			agent.Close()
 		} else {
@@ -401,8 +401,8 @@ func (m *AgentPool) syncAgents(tunnels []services.ReverseTunnel) error {
 		//filtered = tunnels
 	}
 
-	fmt.Printf("--> syncAgents: I'm : %v.\n", m.cfg.HostUUID)
-	fmt.Printf("--> syncAgents: tunnels: %v.\n", filtered)
+	fmt.Printf("--> syncAgents [%v]: I'm %v.\n", m.cfg.Component, m.cfg.HostUUID)
+	//fmt.Printf("--> syncAgents: tunnels: %v.\n", filtered)
 
 	keys, err := tunnelsToAgentKeys(filtered)
 	if err != nil {
