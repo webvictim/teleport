@@ -1343,54 +1343,81 @@ func (process *TeleportProcess) initSSH() error {
 			return trace.Wrap(err)
 		}
 
-		listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
+		//listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
+		//if err != nil {
+		//	return trace.Wrap(err)
+		//}
+		//// clean up unused descriptors passed for proxy, but not used by it
+		//warnOnErr(process.closeImportedDescriptors(teleport.ComponentNode))
+
+		//s, err = regular.New(cfg.SSH.Addr,
+		//	cfg.Hostname,
+		//	[]ssh.Signer{conn.ServerIdentity.KeySigner},
+		//	authClient,
+		//	cfg.DataDir,
+		//	cfg.AdvertiseIP,
+		//	process.proxyPublicAddr(),
+		//	regular.SetLimiter(limiter),
+		//	regular.SetShell(cfg.SSH.Shell),
+		//	regular.SetAuditLog(conn.Client),
+		//	regular.SetSessionServer(conn.Client),
+		//	regular.SetLabels(cfg.SSH.Labels, cfg.SSH.CmdLabels),
+		//	regular.SetNamespace(namespace),
+		//	regular.SetPermitUserEnvironment(cfg.SSH.PermitUserEnvironment),
+		//	regular.SetCiphers(cfg.Ciphers),
+		//	regular.SetKEXAlgorithms(cfg.KEXAlgorithms),
+		//	regular.SetMACAlgorithms(cfg.MACAlgorithms),
+		//	regular.SetPAMConfig(cfg.SSH.PAM),
+		//	regular.SetRotationGetter(process.getRotation),
+		//)
+		//if err != nil {
+		//	return trace.Wrap(err)
+		//}
+
+		//// init uploader service for recording SSH node, if proxy is not
+		//// enabled on this node, because proxy stars uploader service as well
+		//if !cfg.Proxy.Enabled {
+		//	if err := process.initUploaderService(authClient, conn.Client); err != nil {
+		//		return trace.Wrap(err)
+		//	}
+		//}
+
+		//log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
+		//utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
+		//go s.Serve(listener)
+
+		reverseTunnel := services.NewReverseTunnel(conn.ServerIdentity.ID.HostUUID, []string{
+			"localhost:2024",
+		})
+		reverseTunnel.SetType(services.NodeTunnel)
+		err = conn.Client.UpsertReverseTunnel(reverseTunnel)
 		if err != nil {
 			return trace.Wrap(err)
 		}
-		// clean up unused descriptors passed for proxy, but not used by it
-		warnOnErr(process.closeImportedDescriptors(teleport.ComponentNode))
 
-		s, err = regular.New(cfg.SSH.Addr,
-			cfg.Hostname,
-			[]ssh.Signer{conn.ServerIdentity.KeySigner},
-			authClient,
-			cfg.DataDir,
-			cfg.AdvertiseIP,
-			process.proxyPublicAddr(),
-			regular.SetLimiter(limiter),
-			regular.SetShell(cfg.SSH.Shell),
-			regular.SetAuditLog(conn.Client),
-			regular.SetSessionServer(conn.Client),
-			regular.SetLabels(cfg.SSH.Labels, cfg.SSH.CmdLabels),
-			regular.SetNamespace(namespace),
-			regular.SetPermitUserEnvironment(cfg.SSH.PermitUserEnvironment),
-			regular.SetCiphers(cfg.Ciphers),
-			regular.SetKEXAlgorithms(cfg.KEXAlgorithms),
-			regular.SetMACAlgorithms(cfg.MACAlgorithms),
-			regular.SetPAMConfig(cfg.SSH.PAM),
-			regular.SetRotationGetter(process.getRotation),
-		)
+		// Create and start an agent pool.
+		agentPool, err = reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
+			HostUUID:    conn.ServerIdentity.ID.HostUUID,
+			Client:      conn.Client,
+			AccessPoint: conn.Client,
+			HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
+			Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
+			Component:   teleport.ComponentNode,
+		})
 		if err != nil {
 			return trace.Wrap(err)
 		}
-
-		// init uploader service for recording SSH node, if proxy is not
-		// enabled on this node, because proxy stars uploader service as well
-		if !cfg.Proxy.Enabled {
-			if err := process.initUploaderService(authClient, conn.Client); err != nil {
-				return trace.Wrap(err)
-			}
+		if err := agentPool.Start(); err != nil {
+			return trace.Wrap(err)
 		}
 
-		log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
-		utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
-		go s.Serve(listener)
-
-		// broadcast that the node has started
+		// Broadcast that the node has started.
 		process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
 
-		// block and wait while the node is running
-		s.Wait()
+		// Block and wait while the node is running.
+		agentPool.Wait()
+		//s.Wait()
+
 		log.Infof("Exited.")
 		return nil
 	})

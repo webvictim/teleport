@@ -596,6 +596,8 @@ message ReverseTunnelSpecV2 {
 	// DialAddrs is a list of remote address to establish a connection to
 	// it's always SSH over TCP
 	repeated string DialAddrs = 2 [(gogoproto.jsontag) = "dial_addrs,omitempty"];
+    // Type
+	string Type = 3 [(gogoproto.jsontag) = "type", (gogoproto.casttype) = "TunnelType"];
 }
 
 // TunnelConnectionV2 is version 2 of the resource spec of the tunnel connection

@@ -508,6 +508,67 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 		s.Error(trace.BadParameter("can't retrieve certificate type in certType"))
 		return
 	}
+
+	// Extract the role. For proxies, it's another cluster asking to join, for
+	// nodes it's a node dialing back.
+	val, ok := sconn.Permissions.Extensions["role"]
+	if !ok {
+		s.handleNewCluster(conn, sconn, nch)
+	}
+	switch {
+	case val == string(teleport.RoleNode):
+		s.handleNewNode(conn, sconn, nch)
+	case val == string(teleport.RoleProxy):
+		s.handleNewCluster(conn, sconn, nch)
+	default:
+		log.Errorf("Failed to accept connection, unknown role: %v.", val)
+		nch.Reject(ssh.ConnectionFailed, "unknown role")
+	}
+}
+
+func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn) {
+	localCluster, err := s.findLocalCluster(sconn)
+	if err != nil {
+		log.Errorf("Failed to accept connection: node connecting to wrong cluster: %v.", err)
+		newChannel.Reject(ssh.ConnectionFailed, "failed to accept connection")
+		return
+	}
+
+	rconn, err := localCluster.addConn(conn, sshConn)
+	if err != nil {
+		log.Errorf("Failed to accept connection: failed to add connection: %v.", err)
+		newChannel.Reject(ssh.ConnectionFailed, "failed to accept connection")
+		return
+	}
+
+	// Accept the request and start the heartbeat on it.
+	ch, req, err := nch.Accept()
+	if err != nil {
+		log.Error("Failed to accept connection: %v.", err)
+		sconn.Close()
+		return
+	}
+
+	go localCluster.handleHeartbeat(rconn, ch, req)
+}
+
+func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
+	// Cluster name was extracted from certificate and packed into extensions.
+	clusterName := sconn.Permissions.Extensions[extAuthority]
+	if strings.TrimSpace(clusterName) == "" {
+		return nil, trace.BadParameter("empty cluster name")
+	}
+
+	for _, ls := range s.localSites {
+		if ls.domainName == clusterName {
+			return ls, nil
+		}
+	}
+
+	return nil, trace.BadParameter("local cluster %v not found", clusterName)
+}
+
+func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn) {
 	// add the incoming site (cluster) to the list of active connections:
 	site, remoteConn, err := s.upsertSite(conn, sconn)
 	if err != nil {
