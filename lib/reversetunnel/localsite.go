@@ -54,6 +54,7 @@ func newlocalSite(srv *server, domainName string, client auth.ClientI) (*localSi
 		accessPoint:      accessPoint,
 		certificateCache: certificateCache,
 		domainName:       domainName,
+		remoteConns:      make([]map[string]*remoteConn),
 		log: log.WithFields(log.Fields{
 			trace.Component: teleport.ComponentReverseTunnelServer,
 			trace.ComponentFields: map[string]string{
@@ -85,6 +86,9 @@ type localSite struct {
 
 	// certificateCache caches host certificates for the forwarding server.
 	certificateCache *certificateCache
+
+	// remoteConns
+	remoteConns map[string]*remoteConn
 }
 
 // GetTunnelsCount always returns 1 for local cluster
@@ -215,6 +219,90 @@ func (s *localSite) dialWithAgent(params DialParams) (net.Conn, error) {
 
 	return conn, nil
 }
+
+func (s *localSite) addConn(nodeID string, conn net.Conn, sshConn ssh.Conn) (*remoteConn, error) {
+	s.Lock()
+	defer s.Unlock()
+
+	rconn := &remoteConn{
+		sshConn: sshConn,
+		conn:    conn,
+	}
+	s.remoteConns[nodeID] = rconn
+
+	return rconn, nil
+}
+
+func (s *localSite) registerHeartbeat(t time.Time) {
+	// Creates a services.TunnelConnection that looks like: e53470b8-91bd-4ab4-a3c4-c2ec290f7d42-example.com
+	// where "e53470b8-91bd-4ab4-a3c4-c2ec290f7d42-example.com" is the proxy.
+	tunnelConn, err := services.NewTunnelConnection(
+		fmt.Sprintf("%v-%v", s.srv.ID, s.domainName),
+		services.TunnelConnectionSpecV2{
+			ClusterName:   s.domainName,
+			ProxyName:     s.srv.ID,
+			LastHeartbeat: time.Now().UTC(),
+		},
+	)
+	tunnelConn.SetLastHeartbeat(t)
+	tunnelConn.SetExpiry(time.Now().Add(defaults.ReverseTunnelOfflineThreshold))
+
+	err = s.accessPoint.UpsertTunnelConnection(tunnelConn)
+	if err != nil {
+		s.Warnf("Failed to register heartbeat for %v: %v.", nodeID, err)
+	}
+
+	//connInfo := s.copyConnInfo()
+	//connInfo.SetLastHeartbeat(t)
+	//connInfo.SetExpiry(s.clock.Now().Add(defaults.ReverseTunnelOfflineThreshold))
+	//s.setLastConnInfo(connInfo)
+
+	//err := s.localAccessPoint.UpsertTunnelConnection(connInfo)
+	//if err != nil {
+	//	s.Warningf("Failed to register heartbeat: %v.", err)
+	//}
+}
+
+//func (s *localSite) handleHeartbeat(conn *remoteConn, ch ssh.Channel, reqC <-chan *ssh.Request) {
+//	nodeID := sconn.Permissions.Extensions[extHost]
+//	rconn := s.addConn(nodeID, conn, sconn)
+//
+//	_, requestCh, err := newChannel.Accept()
+//	if err != nil {
+//		s.log.Errorf("Failed to accept channel for %v: %v.", rconn.domain, err)
+//		sconn.Close()
+//		return
+//	}
+//
+//	for {
+//		select {
+//		case req := <-requestCh:
+//			if req == nil {
+//				s.log.Infof("Cluster agent for %v disconnected.", rconn.domain)
+//				rconn.markInvalid(trace.ConnectionProblem(nil, "agent disconnected"))
+//
+//				//if !s.hasValidConnections() {
+//				//	s.deleteConnectionRecord()
+//				//}
+//				return
+//			}
+//
+//			var timeSent time.Time
+//			var roundtrip time.Duration
+//			if req.Payload != nil {
+//				if err := timeSent.UnmarshalText(req.Payload); err == nil {
+//					roundtrip = s.srv.Clock.Now().Sub(timeSent)
+//				}
+//			}
+//			if roundtrip != 0 {
+//				logrus.WithFields(logrus.Fields{"latency": roundtrip}).Debugf("ping <- %v", rconn.conn.RemoteAddr())
+//			} else {
+//				s.log.Debugf("ping <- %v", rconn.conn.RemoteAddr())
+//			}
+//			go s.registerHeartbeat(nodeID, time.Now())
+//		}
+//	}
+//}
 
 func findServer(addr string, servers []services.Server) (services.Server, error) {
 	for i := range servers {

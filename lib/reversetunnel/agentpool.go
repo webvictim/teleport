@@ -70,6 +70,8 @@ type AgentPoolConfig struct {
 	Clock clockwork.Clock
 	// KubeDialAddr is an address of a kubernetes proxy
 	KubeDialAddr utils.NetAddr
+	// Component
+	Component string
 }
 
 // CheckAndSetDefaults checks and sets defaults
@@ -365,6 +367,22 @@ func (m *AgentPool) reportStats() {
 func (m *AgentPool) syncAgents(tunnels []services.ReverseTunnel) error {
 	m.Lock()
 	defer m.Unlock()
+
+	filtered := make([]services.ReverseTunnel, 0, len(tunnels))
+	switch m.cfg.Component {
+	case teleport.ComponentProxy:
+		for _, t := range tunnels {
+			if t.GetType() == services.ProxyTunnel {
+				filtered = append(filtered, t)
+			}
+		}
+	case teleport.ComponentNode:
+		for _, t := range tunnels {
+			if t.GetName() == m.cfg.HostUUID {
+				filtered = append(filtered, t)
+			}
+		}
+	}
 
 	keys, err := tunnelsToAgentKeys(tunnels)
 	if err != nil {

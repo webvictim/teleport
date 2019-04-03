@@ -526,30 +526,22 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	}
 }
 
-func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn) {
-	localCluster, err := s.findLocalCluster(sconn)
+func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
+	cluster, rconn, err := s.upsertNode(conn, sconn)
 	if err != nil {
-		log.Errorf("Failed to accept connection: node connecting to wrong cluster: %v.", err)
-		newChannel.Reject(ssh.ConnectionFailed, "failed to accept connection")
-		return
-	}
-
-	rconn, err := localCluster.addConn(conn, sshConn)
-	if err != nil {
-		log.Errorf("Failed to accept connection: failed to add connection: %v.", err)
-		newChannel.Reject(ssh.ConnectionFailed, "failed to accept connection")
-		return
-	}
-
-	// Accept the request and start the heartbeat on it.
-	ch, req, err := nch.Accept()
-	if err != nil {
-		log.Error("Failed to accept connection: %v.", err)
+		log.Errorf("Failed to upsert node: %v.", err)
 		sconn.Close()
 		return
 	}
 
-	go localCluster.handleHeartbeat(rconn, ch, req)
+	ch, req, err := nch.Accept()
+	if err != nil {
+		log.Errorf("Failed to accept on channel: %v.", err)
+		sconn.Close()
+		return
+	}
+
+	go cluster.handleHeartbeat(rconn, ch, req)
 }
 
 func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
@@ -568,7 +560,7 @@ func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
 	return nil, trace.BadParameter("local cluster %v not found", clusterName)
 }
 
-func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn) {
+func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn, nch ssh.NewChannel) {
 	// add the incoming site (cluster) to the list of active connections:
 	site, remoteConn, err := s.upsertSite(conn, sconn)
 	if err != nil {
@@ -732,6 +724,30 @@ func (s *server) checkHostCert(logger *log.Entry, user string, clusterName strin
 	}
 
 	return nil
+}
+
+func (s *server) upsertNode(conn net.Conn, sconn *ssh.ServerConn) (*localSite, *remoteConn, error) {
+	s.Lock()
+	defer s.Unlock()
+
+	cluster, err := s.findLocalCluster(sconn)
+	if err != nil {
+		return nil, nil, trace.Wrap(err)
+	}
+
+	nodeID, ok := sconn.Permissions.Extensions[extHost]
+	if !ok {
+		return nil, nil, trace.BadParameter("host id not found")
+	}
+
+	rconn, err := cluster.addConn(nodeID, conn, sconn)
+	if err != nil {
+		return nil, nil, trace.Wrap(err)
+	}
+
+	go cluster.registerHeartbeat(time.Now())
+
+	return cluster, rconn, nil
 }
 
 func (s *server) upsertSite(conn net.Conn, sshConn *ssh.ServerConn) (*remoteSite, *remoteConn, error) {
