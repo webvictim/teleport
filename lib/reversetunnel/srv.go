@@ -241,6 +241,8 @@ func NewServer(cfg Config) (Server, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
+		go cluster.periodicSendDiscoveryRequests()
+
 		srv.localSites = append(srv.localSites, cluster)
 	}
 
@@ -264,7 +266,7 @@ func NewServer(cfg Config) (Server, error) {
 		return nil, err
 	}
 	srv.srv = s
-	go srv.periodicFunctions()
+	//go srv.periodicFunctions()
 	return srv, nil
 }
 
@@ -512,6 +514,7 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	// Extract the role. For proxies, it's another cluster asking to join, for
 	// nodes it's a node dialing back.
 	val, ok := sconn.Permissions.Extensions["role"]
+	fmt.Printf("--> HandleNewChan: val: %v, ok: %v.\n", val, ok)
 	if !ok {
 		s.handleNewCluster(conn, sconn, nch)
 	}
@@ -562,7 +565,7 @@ func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
 
 func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn, nch ssh.NewChannel) {
 	// add the incoming site (cluster) to the list of active connections:
-	site, remoteConn, err := s.upsertSite(conn, sconn)
+	site, remoteConn, err := s.upsertSite(conn, sshConn)
 	if err != nil {
 		log.Error(trace.Wrap(err))
 		nch.Reject(ssh.ConnectionFailed, "failed to accept incoming cluster connection")
@@ -572,7 +575,7 @@ func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn, nch ss
 	ch, req, err := nch.Accept()
 	if err != nil {
 		log.Error(trace.Wrap(err))
-		sconn.Close()
+		sshConn.Close()
 		return
 	}
 	go site.handleHeartbeat(remoteConn, ch, req)
@@ -664,6 +667,7 @@ func (s *server) keyAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 				extHost:      conn.User(),
 				extCertType:  extCertTypeHost,
 				extAuthority: authDomain,
+				"role":       cert.Extensions["x-teleport-role"],
 			},
 		}, nil
 	case ssh.UserCert:
@@ -930,6 +934,8 @@ func (rc *remoteConn) isReady() bool {
 
 // newRemoteSite helper creates and initializes 'remoteSite' instance
 func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
+	fmt.Printf("--> Creating remote site: %v.\n", domainName)
+
 	connInfo, err := services.NewTunnelConnection(
 		fmt.Sprintf("%v-%v", srv.ID, domainName),
 		services.TunnelConnectionSpecV2{

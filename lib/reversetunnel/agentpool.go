@@ -384,12 +384,27 @@ func (m *AgentPool) syncAgents(tunnels []services.ReverseTunnel) error {
 		}
 	}
 
-	keys, err := tunnelsToAgentKeys(tunnels)
+	keys, err := tunnelsToAgentKeys(filtered)
 	if err != nil {
 		return trace.Wrap(err)
 	}
 
 	agentsToAdd, agentsToRemove := diffTunnels(m.agents, keys)
+
+	if m.cfg.Component != "proxy" {
+		fmt.Printf("--> fetch and sync: [%v] filtered: %v.\n", m.cfg.Component, filtered)
+		for k, _ := range m.agents {
+			fmt.Printf("--> fetch and sync: [%v] m.agents: %v.\n", m.cfg.Component, k.domainName)
+		}
+		for k, _ := range keys {
+			fmt.Printf("--> fetch and sync: [%v] keys: %v.\n", m.cfg.Component, k.domainName)
+		}
+		fmt.Printf("--> fetch and sync: [%v] agentsToAdd: %v.\n", m.cfg.Component, len(agentsToAdd))
+		for _, v := range agentsToRemove {
+			fmt.Printf("--> fetch and sync: [%v] agentsToRemove: %v.\n", m.cfg.Component, v.domainName)
+		}
+	}
+
 	// remove agents from deleted reverse tunnels
 	for _, key := range agentsToRemove {
 		m.closeAgents(&key)
