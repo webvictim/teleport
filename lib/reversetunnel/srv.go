@@ -514,7 +514,6 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	// Extract the role. For proxies, it's another cluster asking to join, for
 	// nodes it's a node dialing back.
 	val, ok := sconn.Permissions.Extensions["role"]
-	fmt.Printf("--> HandleNewChan: val: %v, ok: %v.\n", val, ok)
 	if !ok {
 		s.handleNewCluster(conn, sconn, nch)
 	}
@@ -880,6 +879,8 @@ type remoteConn struct {
 	discoveryErr  error
 	closed        int32
 	lastHeartbeat int64
+
+	nodeID string
 }
 
 func (rc *remoteConn) openDiscoveryChannel() (ssh.Channel, error) {
@@ -934,8 +935,6 @@ func (rc *remoteConn) isReady() bool {
 
 // newRemoteSite helper creates and initializes 'remoteSite' instance
 func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
-	fmt.Printf("--> Creating remote site: %v.\n", domainName)
-
 	connInfo, err := services.NewTunnelConnection(
 		fmt.Sprintf("%v-%v", srv.ID, domainName),
 		services.TunnelConnectionSpecV2{

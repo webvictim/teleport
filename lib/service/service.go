@@ -1305,6 +1305,8 @@ func (process *TeleportProcess) initSSH() error {
 		trace.Component: teleport.Component(teleport.ComponentNode, process.id),
 	})
 
+	var agentPool *reversetunnel.AgentPool
+
 	process.RegisterCriticalFunc("ssh.node", func() error {
 		var event Event
 		select {
@@ -1398,7 +1400,8 @@ func (process *TeleportProcess) initSSH() error {
 		}
 
 		// Create and start an agent pool.
-		agentPool, err := reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
+		fmt.Printf("--> Creating NewAgentPool for node.\n")
+		agentPool, err = reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
 			HostUUID:    conn.ServerIdentity.ID.HostUUID,
 			Client:      conn.Client,
 			AccessPoint: conn.Client,
@@ -1425,6 +1428,8 @@ func (process *TeleportProcess) initSSH() error {
 	})
 	// execute this when process is asked to exit:
 	process.onExit("ssh.shutdown", func(payload interface{}) {
+		agentPool.Stop()
+
 		if payload == nil {
 			log.Infof("Shutting down immediately.")
 			if s != nil {

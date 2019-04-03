@@ -230,6 +230,7 @@ func (s *localSite) addConn(nodeID string, conn net.Conn, sshConn ssh.Conn) (*re
 	rconn := &remoteConn{
 		sshConn: sshConn,
 		conn:    conn,
+		nodeID:  nodeID,
 	}
 	s.remoteConns[nodeID] = rconn
 
@@ -380,15 +381,16 @@ func (s *localSite) sendDiscoveryRequest() error {
 	//s.Debugf("Proxy %q is going to request discovery for: %q.", connInfo.GetProxyName(), Proxies(disconnectedProxies))
 	log.Debugf("Proxy %q is going to request discovery for: %q.", s.srv.ID, Proxies(disconnectedProxies))
 
-	req := discoveryRequest{
-		//ClusterName: s.domainName,
-		ClusterName: s.srv.ID + "." + s.domainName,
-		Proxies:     disconnectedProxies,
-	}
-	payload, err := marshalDiscoveryRequest(req)
-	if err != nil {
-		return trace.Wrap(err)
-	}
+	//req := discoveryRequest{
+	//	//ClusterName: s.domainName,
+	//	ClusterName: nodeID,
+	//	Proxies:     disconnectedProxies,
+	//}
+	//payload, err := marshalDiscoveryRequest(req)
+	//if err != nil {
+	//	return trace.Wrap(err)
+	//}
+
 	send := func() error {
 		var remoteConn *remoteConn
 		for _, rconn := range s.remoteConns {
@@ -396,6 +398,16 @@ func (s *localSite) sendDiscoveryRequest() error {
 		}
 		if remoteConn == nil {
 			return nil
+		}
+
+		req := discoveryRequest{
+			//ClusterName: s.domainName,
+			ClusterName: remoteConn.nodeID,
+			Proxies:     disconnectedProxies,
+		}
+		payload, err := marshalDiscoveryRequest(req)
+		if err != nil {
+			return trace.Wrap(err)
 		}
 
 		//remoteConn, err := s.nextConn()
