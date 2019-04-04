@@ -40,7 +40,7 @@ message Metadata {
 message Rotation {
     option (gogoproto.goproto_stringer) = false;
     option (gogoproto.stringer) = false;
-    
+
 	// State could be one of "init" or "in_progress".
 	string State = 1 [(gogoproto.jsontag) = "state,omitempty"];
 	// Phase is the current rotation phase.
@@ -145,7 +145,7 @@ message CertAuthorityV2 {
 	// Kind is a resource kind
 	string Kind = 1 [(gogoproto.jsontag) = "kind"];
     // SubKind is an optional resource sub kind, used in some resources
-	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];        
+	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
 	// Version is version
 	string Version = 3 [(gogoproto.jsontag) = "version"];
 	// Metadata is connector metadata
@@ -315,7 +315,7 @@ message ClusterConfigSpecV3 {
 
 	// ClientIdleTimeout sets global cluster default setting for client idle timeouts
     int64 ClientIdleTimeout = 5 [(gogoproto.jsontag) = "client_idle_timeout", (gogoproto.casttype) = "Duration"];
-    
+
 	// DisconnectExpiredCert provides disconnect expired certificate setting -
 	// if true, connections with expired client certificates will get disconnected
 	bool DisconnectExpiredCert = 6 [(gogoproto.jsontag) = "disconnect_expired_cert", (gogoproto.casttype) = "Bool"];
@@ -342,7 +342,7 @@ message AuditConfig {
     StringValues AuditEventsURI = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "audit_events_uri,omitempty", (gogoproto.customtype) = "Strings"];
 	// AuditTableName is a DB table name used for audits
 	// Deprecated in favor of AuditEventsURI
-	// DELETE IN (3.1.0)    
+	// DELETE IN (3.1.0)
 	string AuditTableName = 5 [(gogoproto.jsontag) = "audit_table_name,omitempty"];
 }
 
@@ -543,7 +543,6 @@ message LoginStatus {
     google.protobuf.Timestamp LockedTime = 3 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false, (gogoproto.jsontag) = "locked_time,omitempty"];
 	// LockExpires contains time when this lock will expire
 	google.protobuf.Timestamp LockExpires = 4 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false, (gogoproto.jsontag) = "lock_expires,omitempty"];
-     
 }
 
 // CreatedBy holds information about the person or agent who created the user
@@ -596,7 +595,7 @@ message ReverseTunnelSpecV2 {
 	// DialAddrs is a list of remote address to establish a connection to
 	// it's always SSH over TCP
 	repeated string DialAddrs = 2 [(gogoproto.jsontag) = "dial_addrs,omitempty"];
-    // Type
+    // Type is the type of reverse tunnel, either proxy or node.
 	string Type = 3 [(gogoproto.jsontag) = "type", (gogoproto.casttype) = "TunnelType"];
 }
 
@@ -625,4 +624,6 @@ message TunnelConnectionSpecV2 {
 	string ProxyName = 2 [(gogoproto.jsontag) = "proxy_name"];
 	// LastHeartbeat is a time of the last heartbeat
     google.protobuf.Timestamp LastHeartbeat = 3 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false, (gogoproto.jsontag) = "last_heartbeat,omitempty"];
+    // Type is the type of reverse tunnel, either proxy or node.
+	string Type = 4 [(gogoproto.jsontag) = "type", (gogoproto.casttype) = "TunnelType"];
 }

@@ -35,23 +35,18 @@ import (
 type ReverseTunnel interface {
 	// Resource provides common methods for resource objects
 	Resource
-
 	// GetClusterName returns name of the cluster
 	GetClusterName() string
 	// SetClusterName sets cluster name
 	SetClusterName(name string)
-
 	// GetType gets the type of ReverseTunnel.
 	GetType() TunnelType
 	// SetType sets the type of ReverseTunnel.
 	SetType(TunnelType)
-
 	// GetDialAddrs returns list of dial addresses for this cluster
 	GetDialAddrs() []string
-
 	// Check checks tunnel for errors
 	Check() error
-
 	// CheckAndSetDefaults checks and set default values for any missing fields.
 	CheckAndSetDefaults() error
 }

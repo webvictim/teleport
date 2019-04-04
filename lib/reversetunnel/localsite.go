@@ -243,6 +243,7 @@ func (s *localSite) registerHeartbeat(t time.Time) {
 	tunnelConn, err := services.NewTunnelConnection(
 		fmt.Sprintf("%v-%v", s.srv.ID, s.domainName),
 		services.TunnelConnectionSpecV2{
+			Type:          services.NodeTunnel,
 			ClusterName:   s.domainName,
 			ProxyName:     s.srv.ID,
 			LastHeartbeat: time.Now().UTC(),

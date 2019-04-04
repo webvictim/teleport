@@ -13,6 +13,7 @@ import (
 
 type discoveryRequest struct {
 	ClusterName string            `json:"cluster_name"`
+	NodeID      string            `json:"node_id"`
 	ClusterAddr utils.NetAddr     `json:"-"`
 	Proxies     []services.Server `json:"proxies"`
 }

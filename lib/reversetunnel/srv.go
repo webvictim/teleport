@@ -266,7 +266,7 @@ func NewServer(cfg Config) (Server, error) {
 		return nil, err
 	}
 	srv.srv = s
-	//go srv.periodicFunctions()
+	go srv.periodicFunctions()
 	return srv, nil
 }
 
@@ -345,7 +345,11 @@ func (s *server) fetchClusterPeers() error {
 	newConns := make(map[string]services.TunnelConnection)
 	for i := range conns {
 		newConn := conns[i]
-		// filter out peer records for our own proxy
+		// Filter out node tunnels.
+		if newConn.GetType() == services.NodeTunnel {
+			continue
+		}
+		// Filter out peer records for own proxy.
 		if newConn.GetProxyName() == s.ID {
 			continue
 		}
