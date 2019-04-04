@@ -521,8 +521,10 @@ func (s *remoteSite) sendDiscoveryRequest() error {
 	connInfo := s.copyConnInfo()
 	s.Debugf("Proxy %q is going to request discovery for: %q.", connInfo.GetProxyName(), Proxies(disconnectedProxies))
 	req := discoveryRequest{
-		ClusterName: clusterName.GetClusterName(),
-		Proxies:     disconnectedProxies,
+		//ClusterName: clusterName.GetClusterName(),
+		TunnelID: clusterName.GetClusterName(),
+		Type:     string(services.ProxyTunnel),
+		Proxies:  disconnectedProxies,
 	}
 	payload, err := marshalDiscoveryRequest(req)
 	if err != nil {

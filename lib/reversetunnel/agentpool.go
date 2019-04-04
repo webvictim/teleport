@@ -290,9 +290,14 @@ func (m *AgentPool) pollAndSyncAgents() {
 }
 
 func (m *AgentPool) addAgent(key agentKey, discoverProxies []services.Server) error {
+	clusterName := key.tunnelID
+	if key.tunnelType == string(services.NodeTunnel) {
+		clusterName = m.cfg.Cluster
+	}
+
 	agent, err := NewAgent(AgentConfig{
 		Addr:            key.addr,
-		RemoteCluster:   key.domainName,
+		ClusterName:     clusterName,
 		Username:        m.cfg.HostUUID,
 		Signers:         m.cfg.HostSigners,
 		Client:          m.cfg.Client,
@@ -322,7 +327,7 @@ func (m *AgentPool) Counts() map[string]int {
 	out := make(map[string]int)
 
 	for key, agents := range m.agents {
-		out[key.domainName] += len(agents)
+		out[key.tunnelID] += len(agents)
 	}
 
 	return out
@@ -338,7 +343,7 @@ func (m *AgentPool) reportStats() {
 	}
 
 	for key, agents := range m.agents {
-		m.Debugf("Outbound tunnel for %v connected to %v proxies.", key.domainName, len(agents))
+		m.Debugf("Outbound tunnel for %v connected to %v proxies.", key.tunnelID, len(agents))
 
 		countPerState := map[string]int{
 			agentStateConnecting:   0,
@@ -351,7 +356,7 @@ func (m *AgentPool) reportStats() {
 			countPerState[a.getState()]++
 		}
 		for state, count := range countPerState {
-			gauge, err := trustedClustersStats.GetMetricWithLabelValues(key.domainName, state)
+			gauge, err := trustedClustersStats.GetMetricWithLabelValues(key.tunnelID, state)
 			if err != nil {
 				m.Warningf("Failed to get gauge: %v.", err)
 				continue
@@ -359,7 +364,7 @@ func (m *AgentPool) reportStats() {
 			gauge.Set(float64(count))
 		}
 		if logReport {
-			m.WithFields(log.Fields{"target": key.domainName, "stats": countPerState}).Info("Outbound tunnel stats.")
+			m.WithFields(log.Fields{"target": key.tunnelID, "stats": countPerState}).Info("Outbound tunnel stats.")
 		}
 	}
 }
@@ -394,14 +399,14 @@ func (m *AgentPool) syncAgents(tunnels []services.ReverseTunnel) error {
 	//if m.cfg.Component != "proxy" {
 	//	fmt.Printf("--> fetch and sync: [%v] filtered: %v.\n", m.cfg.Component, filtered)
 	//	for k, _ := range m.agents {
-	//		fmt.Printf("--> fetch and sync: [%v] m.agents: %v.\n", m.cfg.Component, k.domainName)
+	//		fmt.Printf("--> fetch and sync: [%v] m.agents: %v.\n", m.cfg.Component, k.tunnelID)
 	//	}
 	//	for k, _ := range keys {
-	//		fmt.Printf("--> fetch and sync: [%v] keys: %v.\n", m.cfg.Component, k.domainName)
+	//		fmt.Printf("--> fetch and sync: [%v] keys: %v.\n", m.cfg.Component, k.tunnelID)
 	//	}
 	//	fmt.Printf("--> fetch and sync: [%v] agentsToAdd: %v.\n", m.cfg.Component, len(agentsToAdd))
 	//	for _, v := range agentsToRemove {
-	//		fmt.Printf("--> fetch and sync: [%v] agentsToRemove: %v.\n", m.cfg.Component, v.domainName)
+	//		fmt.Printf("--> fetch and sync: [%v] agentsToRemove: %v.\n", m.cfg.Component, v.tunnelID)
 	//	}
 	//}
 
@@ -467,7 +472,7 @@ func tunnelToAgentKeys(tunnel services.ReverseTunnel) ([]agentKey, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		out[i] = agentKey{addr: *netaddr, domainName: tunnel.GetClusterName()}
+		out[i] = agentKey{addr: *netaddr, tunnelType: string(tunnel.GetType()), tunnelID: tunnel.GetClusterName()}
 	}
 	return out, nil
 }
@@ -490,10 +495,11 @@ func diffTunnels(existingTunnels map[agentKey][]*Agent, arrivedKeys map[agentKey
 }
 
 type agentKey struct {
-	domainName string
+	tunnelID   string
+	tunnelType string
 	addr       utils.NetAddr
 }
 
 func (a *agentKey) String() string {
-	return fmt.Sprintf("agent(%v, %v)", a.domainName, a.addr.String())
+	return fmt.Sprintf("agent(id=%v, type=%v, %v)", a.tunnelID, a.tunnelType, a.addr.String())
 }

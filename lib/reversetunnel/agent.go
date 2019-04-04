@@ -62,8 +62,8 @@ const (
 type AgentConfig struct {
 	// Addr is target address to dial
 	Addr utils.NetAddr
-	// RemoteCluster is a remote cluster name to connect to
-	RemoteCluster string
+	// ClusterName is the name of the cluster the tunnel is connected to.
+	ClusterName string
 	// Signers contains authentication signers
 	Signers []ssh.Signer
 	// Client is a client to the local auth servers
@@ -171,9 +171,9 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 
 func (a *Agent) String() string {
 	if len(a.DiscoverProxies) == 0 {
-		return fmt.Sprintf("agent(%v) -> %v:%v", a.getState(), a.RemoteCluster, a.Addr.String())
+		return fmt.Sprintf("agent(%v) -> %v:%v", a.getState(), a.ClusterName, a.Addr.String())
 	}
-	return fmt.Sprintf("agent(%v) -> %v:%v, discover %v", a.getState(), a.RemoteCluster, a.Addr.String(), Proxies(a.DiscoverProxies))
+	return fmt.Sprintf("agent(%v) -> %v:%v, discover %v", a.getState(), a.ClusterName, a.Addr.String(), Proxies(a.DiscoverProxies))
 }
 
 func (a *Agent) getLastStateChange() time.Time {
@@ -225,8 +225,9 @@ func (a *Agent) Wait() error {
 // connectedTo returns true if connected services.Server passed in.
 func (a *Agent) connectedTo(proxy services.Server) bool {
 	principals := a.getPrincipals()
-	//proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), a.RemoteCluster)
-	proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), "example.com")
+	proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), a.ClusterName)
+	//proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), "example.com")
+	fmt.Printf("--> connectedTo: proxyID: %v.\n", proxyID)
 	if _, ok := principals[proxyID]; ok {
 		return true
 	}

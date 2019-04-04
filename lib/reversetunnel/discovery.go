@@ -12,8 +12,8 @@ import (
 )
 
 type discoveryRequest struct {
-	ClusterName string            `json:"cluster_name"`
-	NodeID      string            `json:"node_id"`
+	TunnelID    string            `json:"cluster_name"`
+	Type        string            `json:"type"`
 	ClusterAddr utils.NetAddr     `json:"-"`
 	Proxies     []services.Server `json:"proxies"`
 }
@@ -48,17 +48,18 @@ func (proxies Proxies) Equal(other []services.Server) bool {
 }
 
 func (r discoveryRequest) key() agentKey {
-	return agentKey{domainName: r.ClusterName, addr: r.ClusterAddr}
+	return agentKey{tunnelID: r.TunnelID, tunnelType: r.Type, addr: r.ClusterAddr}
 }
 
 func (r discoveryRequest) String() string {
 	return fmt.Sprintf("discovery request, cluster name: %v, address: %v, proxies: %v",
-		r.ClusterName, r.ClusterAddr, Proxies(r.Proxies))
+		r.TunnelID, r.ClusterAddr, Proxies(r.Proxies))
 }
 
 type discoveryRequestRaw struct {
-	ClusterName string            `json:"cluster_name"`
-	Proxies     []json.RawMessage `json:"proxies"`
+	TunnelID string            `json:"cluster_name"`
+	Type     string            `json:"type"`
+	Proxies  []json.RawMessage `json:"proxies"`
 }
 
 func marshalDiscoveryRequest(req discoveryRequest) ([]byte, error) {
@@ -71,7 +72,8 @@ func marshalDiscoveryRequest(req discoveryRequest) ([]byte, error) {
 		}
 		out.Proxies = append(out.Proxies, data)
 	}
-	out.ClusterName = req.ClusterName
+	out.TunnelID = req.TunnelID
+	out.Type = req.Type
 	return json.Marshal(out)
 }
 
@@ -93,6 +95,7 @@ func unmarshalDiscoveryRequest(data []byte) (*discoveryRequest, error) {
 		}
 		out.Proxies = append(out.Proxies, proxy)
 	}
-	out.ClusterName = raw.ClusterName
+	out.TunnelID = raw.TunnelID
+	out.Type = raw.Type
 	return &out, nil
 }

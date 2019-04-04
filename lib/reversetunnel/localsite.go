@@ -403,8 +403,9 @@ func (s *localSite) sendDiscoveryRequest() error {
 
 		req := discoveryRequest{
 			//ClusterName: s.domainName,
-			ClusterName: remoteConn.nodeID,
-			Proxies:     disconnectedProxies,
+			TunnelID: remoteConn.nodeID,
+			Type:     string(services.NodeTunnel),
+			Proxies:  disconnectedProxies,
 		}
 		payload, err := marshalDiscoveryRequest(req)
 		if err != nil {
