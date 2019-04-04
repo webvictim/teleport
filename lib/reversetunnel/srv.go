@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
+	//"sync/atomic"
 	"time"
 
 	"github.com/gravitational/teleport"
@@ -241,7 +241,7 @@ func NewServer(cfg Config) (Server, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		go cluster.periodicSendDiscoveryRequests()
+		//go cluster.periodicSendDiscoveryRequests()
 
 		srv.localSites = append(srv.localSites, cluster)
 	}
@@ -874,68 +874,68 @@ func (s *server) RemoveSite(domainName string) error {
 	return trace.NotFound("cluster %q is not found", domainName)
 }
 
-type remoteConn struct {
-	sshConn       ssh.Conn
-	conn          net.Conn
-	invalid       int32
-	log           *log.Entry
-	discoveryC    ssh.Channel
-	discoveryErr  error
-	closed        int32
-	lastHeartbeat int64
-
-	nodeID string
-}
-
-func (rc *remoteConn) openDiscoveryChannel() (ssh.Channel, error) {
-	if rc.discoveryC != nil {
-		return rc.discoveryC, nil
-	}
-	if rc.discoveryErr != nil {
-		return nil, trace.Wrap(rc.discoveryErr)
-	}
-	discoveryC, _, err := rc.sshConn.OpenChannel(chanDiscovery, nil)
-	if err != nil {
-		rc.discoveryErr = err
-		return nil, trace.Wrap(err)
-	}
-	rc.discoveryC = discoveryC
-	return rc.discoveryC, nil
-}
-
-func (rc *remoteConn) String() string {
-	return fmt.Sprintf("remoteConn(remoteAddr=%v)", rc.conn.RemoteAddr())
-}
-
-func (rc *remoteConn) Close() error {
-	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
-		// already closed
-		return nil
-	}
-	if rc.discoveryC != nil {
-		rc.discoveryC.Close()
-		rc.discoveryC = nil
-	}
-	return rc.sshConn.Close()
-}
-
-func (rc *remoteConn) markInvalid(err error) {
-	atomic.StoreInt32(&rc.invalid, 1)
-}
-
-func (rc *remoteConn) isInvalid() bool {
-	return atomic.LoadInt32(&rc.invalid) == 1
-}
-
-func (rc *remoteConn) setLastHeartbeat(tm time.Time) {
-	atomic.StoreInt64(&rc.lastHeartbeat, tm.UnixNano())
-}
-
-// isReady returns true when connection is ready to be tried,
-// it returns true when connection has received the first heartbeat
-func (rc *remoteConn) isReady() bool {
-	return atomic.LoadInt64(&rc.lastHeartbeat) != 0
-}
+//type remoteConn struct {
+//	sshConn       ssh.Conn
+//	conn          net.Conn
+//	invalid       int32
+//	log           *log.Entry
+//	discoveryC    ssh.Channel
+//	discoveryErr  error
+//	closed        int32
+//	lastHeartbeat int64
+//
+//	nodeID string
+//}
+//
+//func (rc *remoteConn) openDiscoveryChannel() (ssh.Channel, error) {
+//	if rc.discoveryC != nil {
+//		return rc.discoveryC, nil
+//	}
+//	if rc.discoveryErr != nil {
+//		return nil, trace.Wrap(rc.discoveryErr)
+//	}
+//	discoveryC, _, err := rc.sshConn.OpenChannel(chanDiscovery, nil)
+//	if err != nil {
+//		rc.discoveryErr = err
+//		return nil, trace.Wrap(err)
+//	}
+//	rc.discoveryC = discoveryC
+//	return rc.discoveryC, nil
+//}
+//
+//func (rc *remoteConn) String() string {
+//	return fmt.Sprintf("remoteConn(remoteAddr=%v)", rc.conn.RemoteAddr())
+//}
+//
+//func (rc *remoteConn) Close() error {
+//	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
+//		// already closed
+//		return nil
+//	}
+//	if rc.discoveryC != nil {
+//		rc.discoveryC.Close()
+//		rc.discoveryC = nil
+//	}
+//	return rc.sshConn.Close()
+//}
+//
+//func (rc *remoteConn) markInvalid(err error) {
+//	atomic.StoreInt32(&rc.invalid, 1)
+//}
+//
+//func (rc *remoteConn) isInvalid() bool {
+//	return atomic.LoadInt32(&rc.invalid) == 1
+//}
+//
+//func (rc *remoteConn) setLastHeartbeat(tm time.Time) {
+//	atomic.StoreInt64(&rc.lastHeartbeat, tm.UnixNano())
+//}
+//
+//// isReady returns true when connection is ready to be tried,
+//// it returns true when connection has received the first heartbeat
+//func (rc *remoteConn) isReady() bool {
+//	return atomic.LoadInt64(&rc.lastHeartbeat) != 0
+//}
 
 // newRemoteSite helper creates and initializes 'remoteSite' instance
 func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
@@ -1001,7 +1001,7 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	}
 	remoteSite.certificateCache = certificateCache
 
-	go remoteSite.periodicSendDiscoveryRequests()
+	//go remoteSite.periodicSendDiscoveryRequests()
 	go remoteSite.periodicUpdateCertAuthorities()
 
 	return remoteSite, nil

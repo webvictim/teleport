@@ -33,7 +33,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv/forward"
-	"github.com/gravitational/teleport/lib/utils"
+	//"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/trace"
 
 	oxyforward "github.com/gravitational/oxy/forward"
@@ -227,19 +227,28 @@ func (s *remoteSite) removeInvalidConns() {
 
 // addConn helper adds a new active remote cluster connection to the list
 // of such connections
-func (s *remoteSite) addConn(conn net.Conn, sshConn ssh.Conn) (*remoteConn, error) {
-	rc := &remoteConn{
-		sshConn: sshConn,
-		conn:    conn,
-		log:     s.Entry,
-	}
-
+func (s *remoteSite) addConn(conn net.Conn, sconn ssh.Conn) (*remoteConn, error) {
 	s.Lock()
 	defer s.Unlock()
 
-	s.connections = append(s.connections, rc)
+	rconn := newRemoteConn(&connConfig{
+		conn:        conn,
+		sconn:       sconn,
+		accessPoint: s.localAccessPoint,
+		tunnelID:    s.domainName,
+		tunnelType:  string(services.ProxyTunnel),
+		proxyName:   s.connInfo.GetProxyName(),
+		clusterName: s.domainName,
+	})
+	//rc := &remoteConn{
+	//	sshConn: sshConn,
+	//	conn:    conn,
+	//	log:     s.Entry,
+	//}
+
+	s.connections = append(s.connections, rconn)
 	s.lastUsed = 0
-	return rc, nil
+	return rconn, nil
 }
 
 func (s *remoteSite) GetStatus() string {
@@ -363,25 +372,25 @@ func (s *remoteSite) compareAndSwapCertAuthority(ca services.CertAuthority) erro
 	return trace.CompareFailed("remote certificate authority rotation has been updated")
 }
 
-func (s *remoteSite) periodicSendDiscoveryRequests() {
-	ticker := time.NewTicker(defaults.ReverseTunnelAgentHeartbeatPeriod)
-	defer ticker.Stop()
-	if err := s.sendDiscoveryRequest(); err != nil {
-		s.Warningf("Failed to send discovery: %v.", err)
-	}
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.Debugf("closing")
-			return
-		case <-ticker.C:
-			err := s.sendDiscoveryRequest()
-			if err != nil {
-				s.Warningf("could not send discovery request: %v", trace.DebugReport(err))
-			}
-		}
-	}
-}
+//func (s *remoteSite) periodicSendDiscoveryRequests() {
+//	ticker := time.NewTicker(defaults.ReverseTunnelAgentHeartbeatPeriod)
+//	defer ticker.Stop()
+//	if err := s.sendDiscoveryRequest(); err != nil {
+//		s.Warningf("Failed to send discovery: %v.", err)
+//	}
+//	for {
+//		select {
+//		case <-s.ctx.Done():
+//			s.Debugf("closing")
+//			return
+//		case <-ticker.C:
+//			err := s.sendDiscoveryRequest()
+//			if err != nil {
+//				s.Warningf("could not send discovery request: %v", trace.DebugReport(err))
+//			}
+//		}
+//	}
+//}
 
 // updateCertAuthorities updates local and remote cert authorities
 func (s *remoteSite) updateCertAuthorities() error {
@@ -470,115 +479,115 @@ func (s *remoteSite) isOnline(conn services.TunnelConnection) bool {
 	return services.TunnelConnectionStatus(s.clock, conn) == teleport.RemoteClusterStatusOnline
 }
 
-// findDisconnectedProxies finds proxies that do not have inbound reverse tunnel
-// connections
-func (s *remoteSite) findDisconnectedProxies() ([]services.Server, error) {
-	connInfo := s.copyConnInfo()
-	conns, err := s.localAccessPoint.GetTunnelConnections(s.domainName, services.SkipValidation())
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	connected := make(map[string]bool)
-	for _, conn := range conns {
-		if s.isOnline(conn) {
-			connected[conn.GetProxyName()] = true
-		}
-	}
-	proxies, err := s.localAccessPoint.GetProxies()
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	var missing []services.Server
-	for i := range proxies {
-		proxy := proxies[i]
-		// do not add this proxy to the list of disconnected proxies
-		if !connected[proxy.GetName()] && proxy.GetName() != connInfo.GetProxyName() {
-			missing = append(missing, proxy)
-		}
-	}
-	return missing, nil
-}
+//// findDisconnectedProxies finds proxies that do not have inbound reverse tunnel
+//// connections
+//func (s *remoteSite) findDisconnectedProxies() ([]services.Server, error) {
+//	connInfo := s.copyConnInfo()
+//	conns, err := s.localAccessPoint.GetTunnelConnections(s.domainName, services.SkipValidation())
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//	connected := make(map[string]bool)
+//	for _, conn := range conns {
+//		if s.isOnline(conn) {
+//			connected[conn.GetProxyName()] = true
+//		}
+//	}
+//	proxies, err := s.localAccessPoint.GetProxies()
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//	var missing []services.Server
+//	for i := range proxies {
+//		proxy := proxies[i]
+//		// do not add this proxy to the list of disconnected proxies
+//		if !connected[proxy.GetName()] && proxy.GetName() != connInfo.GetProxyName() {
+//			missing = append(missing, proxy)
+//		}
+//	}
+//	return missing, nil
+//}
 
-// sendDiscovery requests sends special "Discovery requests"
-// back to the connected agent.
-// Discovery request consists of the proxies that are part
-// of the cluster, but did not receive the connection from the agent.
-// Agent will act on a discovery request attempting
-// to establish connection to the proxies that were not discovered.
-// See package documentation for more details.
-func (s *remoteSite) sendDiscoveryRequest() error {
-	disconnectedProxies, err := s.findDisconnectedProxies()
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	if len(disconnectedProxies) == 0 {
-		return nil
-	}
-	clusterName, err := s.localAccessPoint.GetClusterName()
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	connInfo := s.copyConnInfo()
-	s.Debugf("Proxy %q is going to request discovery for: %q.", connInfo.GetProxyName(), Proxies(disconnectedProxies))
-	req := discoveryRequest{
-		//ClusterName: clusterName.GetClusterName(),
-		TunnelID: clusterName.GetClusterName(),
-		Type:     string(services.ProxyTunnel),
-		Proxies:  disconnectedProxies,
-	}
-	payload, err := marshalDiscoveryRequest(req)
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	send := func() error {
-		remoteConn, err := s.nextConn()
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		discoveryC, err := remoteConn.openDiscoveryChannel()
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		_, err = discoveryC.SendRequest("discovery", false, payload)
-		if err != nil {
-			remoteConn.markInvalid(err)
-			s.Errorf("disconnecting cluster on %v, err: %v",
-				remoteConn.conn.RemoteAddr(),
-				err)
-			return trace.Wrap(err)
-		}
-		return nil
-	}
-
-	// loop over existing connections (reverse tunnels) and try to send discovery
-	// requests to the remote cluster
-	for i := 0; i < s.connectionCount(); i++ {
-		err := send()
-		if err != nil {
-			s.Warningf("%v", err)
-		}
-	}
-	return nil
-}
+//// sendDiscovery requests sends special "Discovery requests"
+//// back to the connected agent.
+//// Discovery request consists of the proxies that are part
+//// of the cluster, but did not receive the connection from the agent.
+//// Agent will act on a discovery request attempting
+//// to establish connection to the proxies that were not discovered.
+//// See package documentation for more details.
+//func (s *remoteSite) sendDiscoveryRequest() error {
+//	disconnectedProxies, err := s.findDisconnectedProxies()
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	if len(disconnectedProxies) == 0 {
+//		return nil
+//	}
+//	clusterName, err := s.localAccessPoint.GetClusterName()
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	connInfo := s.copyConnInfo()
+//	s.Debugf("Proxy %q is going to request discovery for: %q.", connInfo.GetProxyName(), Proxies(disconnectedProxies))
+//	req := discoveryRequest{
+//		//ClusterName: clusterName.GetClusterName(),
+//		TunnelID: clusterName.GetClusterName(),
+//		Type:     string(services.ProxyTunnel),
+//		Proxies:  disconnectedProxies,
+//	}
+//	payload, err := marshalDiscoveryRequest(req)
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	send := func() error {
+//		remoteConn, err := s.nextConn()
+//		if err != nil {
+//			return trace.Wrap(err)
+//		}
+//		discoveryC, err := remoteConn.openDiscoveryChannel()
+//		if err != nil {
+//			return trace.Wrap(err)
+//		}
+//		_, err = discoveryC.SendRequest("discovery", false, payload)
+//		if err != nil {
+//			remoteConn.markInvalid(err)
+//			s.Errorf("disconnecting cluster on %v, err: %v",
+//				remoteConn.conn.RemoteAddr(),
+//				err)
+//			return trace.Wrap(err)
+//		}
+//		return nil
+//	}
+//
+//	// loop over existing connections (reverse tunnels) and try to send discovery
+//	// requests to the remote cluster
+//	for i := 0; i < s.connectionCount(); i++ {
+//		err := send()
+//		if err != nil {
+//			s.Warningf("%v", err)
+//		}
+//	}
+//	return nil
+//}
 
 // dialAccessPoint establishes a connection from the proxy (reverse tunnel server)
 // back into the client using previously established tunnel.
 func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
 	try := func() (net.Conn, error) {
-		remoteConn, err := s.nextConn()
+		rconn, err := s.nextConn()
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		ch, _, err := remoteConn.sshConn.OpenChannel(chanAccessPoint, nil)
+		channel, err := rconn.OpenChannel(chanAccessPoint, nil)
 		if err != nil {
-			remoteConn.markInvalid(err)
+			rconn.markInvalid(err)
 			s.Errorf("disconnecting cluster on %v, err: %v",
-				remoteConn.conn.RemoteAddr(),
+				rconn.conn.RemoteAddr(),
 				err)
 			return nil, trace.Wrap(err)
 		}
 		s.Debugf("success dialing to cluster")
-		return utils.NewChConn(remoteConn.sshConn, ch), nil
+		return rconn.ChannelConn(channel), nil
 	}
 
 	for {
@@ -713,14 +722,13 @@ func (s *remoteSite) connThroughTunnel(transportType string, data string) (conn 
 func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.Conn, bool, error) {
 	var stop bool
 
-	remoteConn, err := s.nextConn()
+	rconn, err := s.nextConn()
 	if err != nil {
 		return nil, stop, trace.Wrap(err)
 	}
-	var ch ssh.Channel
-	ch, _, err = remoteConn.sshConn.OpenChannel(chanTransport, nil)
+	channel, err := rconn.OpenChannel(chanTransport, nil)
 	if err != nil {
-		remoteConn.markInvalid(err)
+		rconn.markInvalid(err)
 		return nil, stop, trace.Wrap(err)
 	}
 	// send a special SSH out-of-band request called "teleport-transport"
@@ -728,22 +736,22 @@ func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.C
 	// 'addr' on its network and will start proxying that connection over
 	// this SSH channel:
 	var dialed bool
-	dialed, err = ch.SendRequest(transportType, true, []byte(addr))
+	dialed, err = channel.SendRequest(transportType, true, []byte(addr))
 	if err != nil {
 		return nil, stop, trace.Wrap(err)
 	}
 	stop = true
 	if !dialed {
-		defer ch.Close()
+		defer channel.Close()
 		// pull the error message from the tunnel client (remote cluster)
 		// passed to us via stderr:
-		errMessage, _ := ioutil.ReadAll(ch.Stderr())
+		errMessage, _ := ioutil.ReadAll(channel.Stderr())
 		if errMessage == nil {
 			errMessage = []byte("failed connecting to " + addr)
 		}
 		return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
 	}
-	return utils.NewChConn(remoteConn.sshConn, ch), stop, nil
+	return rconn.ChannelConn(channel), stop, nil
 }
 
 func (s *remoteSite) handleAuthProxy(w http.ResponseWriter, r *http.Request) {
