@@ -381,8 +381,8 @@ func (*TeleportTunnelMarshaler) MarshalReverseTunnel(rt ReverseTunnel, opts ...M
 }
 
 const (
-	NodeTunnel  TunnelType = "node_tunnel"
-	ProxyTunnel TunnelType = "proxy_tunnel"
+	NodeTunnel  TunnelType = "node"
+	ProxyTunnel TunnelType = "proxy"
 )
 
 type TunnelType string

@@ -240,7 +240,8 @@ func (c *remoteConn) findAndSend() error {
 		return nil
 	}
 
-	c.log.Debugf("Proxy %v sending discovery requests for: %v.", c.proxyName, Proxies(disconnectedProxies))
+	c.log.Debugf("Proxy %v sending %v discovery request with tunnel ID: %v and disconnected proxies: %v.",
+		c.proxyName, string(c.tunnelType), c.tunnelID, Proxies(disconnectedProxies))
 
 	req := discoveryRequest{
 		TunnelID: c.tunnelID,
