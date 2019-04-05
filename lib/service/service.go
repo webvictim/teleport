@@ -1399,6 +1399,11 @@ func (process *TeleportProcess) initSSH() error {
 			return trace.Wrap(err)
 		}
 
+		tlsConfig, err := conn.ClientIdentity.TLSConfig(cfg.CipherSuites)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+
 		// Create and start an agent pool.
 		fmt.Printf("--> Creating NewAgentPool for node.\n")
 		agentPool, err = reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
@@ -1406,6 +1411,7 @@ func (process *TeleportProcess) initSSH() error {
 			Client:      conn.Client,
 			AccessPoint: conn.Client,
 			HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
+			TLSConfig:   tlsConfig,
 			Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 			Component:   teleport.ComponentNode,
 		})

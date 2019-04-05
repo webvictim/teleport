@@ -22,6 +22,7 @@ package reversetunnel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -66,6 +67,8 @@ type AgentConfig struct {
 	ClusterName string
 	// Signers contains authentication signers
 	Signers []ssh.Signer
+	// TLSConfig
+	TLSConfig *tls.Config
 	// Client is a client to the local auth servers
 	Client auth.ClientI
 	// AccessPoint is a caching access point to the local auth servers
@@ -226,8 +229,6 @@ func (a *Agent) Wait() error {
 func (a *Agent) connectedTo(proxy services.Server) bool {
 	principals := a.getPrincipals()
 	proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), a.ClusterName)
-	//proxyID := fmt.Sprintf("%v.%v", proxy.GetName(), "example.com")
-	fmt.Printf("--> connectedTo: proxyID: %v.\n", proxyID)
 	if _, ok := principals[proxyID]; ok {
 		return true
 	}
@@ -503,6 +504,49 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
+
+	go func() {
+		authDialer := func(in context.Context, network, addr string) (net.Conn, error) {
+			authCh, _, err := conn.OpenChannel("auth", nil)
+			if err != nil {
+				return nil, trace.Wrap(err)
+			}
+			return utils.NewChConn(conn.Conn, authCh), nil
+		}
+
+		for i := 0; i < 10; i++ {
+			// check if all cert authorities are initiated and if everything is OK
+			ca, err := a.AccessPoint.GetCertAuthority(services.CertAuthID{
+				Type:       services.HostCA,
+				DomainName: a.ClusterName,
+			}, false)
+			if err != nil {
+				fmt.Printf("--> NEW: 0 err: %v.\n", err)
+				continue
+			}
+			pool, err := services.CertPool(ca)
+			if err != nil {
+				fmt.Printf("--> NEW: 1 err: %v.\n", err)
+				continue
+			}
+			tlsConfig := a.TLSConfig.Clone()
+			tlsConfig.RootCAs = pool
+			//tlsConfig.ServerName = auth.EncodeClusterName("example.com")
+			clt, err := auth.NewTLSClientWithDialer(authDialer, tlsConfig)
+			if err != nil {
+				fmt.Printf("--> NEW: 2 err: %v.\n", err)
+				continue
+			}
+			clusterConfig, err := clt.GetClusterConfig()
+			if err != nil {
+				fmt.Printf("--> NEW: 3 err: %v.\n", err)
+				continue
+			}
+			fmt.Printf("--> NEW!! clusterConfig=%v.\n", clusterConfig)
+			time.Sleep(2 * time.Second)
+		}
+	}()
+
 	newTransportC := conn.HandleChannelOpen(chanTransport)
 	newDiscoveryC := conn.HandleChannelOpen(chanDiscovery)
 
@@ -514,6 +558,11 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 		// need to exit:
 		case <-a.ctx.Done():
 			return trace.ConnectionProblem(nil, "heartbeat: agent is stopped")
+		// ssh channel closed:
+		case req := <-reqC:
+			if req == nil {
+				return trace.ConnectionProblem(nil, "heartbeat: connection closed")
+			}
 		// time to ping:
 		case <-ticker.C:
 			bytes, _ := a.Clock.Now().UTC().MarshalText()
@@ -523,11 +572,6 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 				return trace.Wrap(err)
 			}
 			a.Debugf("Ping -> %v.", conn.RemoteAddr())
-		// ssh channel closed:
-		case req := <-reqC:
-			if req == nil {
-				return trace.ConnectionProblem(nil, "heartbeat: connection closed")
-			}
 		// new transport request:
 		case nch := <-newTransportC:
 			if nch == nil {
@@ -604,7 +648,7 @@ const (
 
 const (
 	// RemoteAuthServer is a special non-resolvable address that indicates client
-	// requests  a connection to the remote auth server.
+	// requests a connection to the remote auth server.
 	RemoteAuthServer = "@remote-auth-server"
 	// RemoteKubeProxy is a special non-resolvable address that indicates that clients
 	// requests a connection to the remote kubernetes proxy.

@@ -99,12 +99,7 @@ func newRemoteConn(cfg *connConfig) *remoteConn {
 			trace.Component: "discovery",
 		}),
 		connConfig: cfg,
-		//conn:        conn,
-		//sconn:       sconn,
-		//accessPoint: accessPoint,
-		//domain:      domain,
-		//proxyName:   proxyName,
-		clock: clockwork.NewRealClock(),
+		clock:      clockwork.NewRealClock(),
 	}
 
 	c.closeContext, c.closeCancel = context.WithCancel(context.Background())

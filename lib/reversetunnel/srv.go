@@ -20,11 +20,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	//"sync/atomic"
 	"time"
 
 	"github.com/gravitational/teleport"
@@ -491,24 +491,62 @@ func (s *server) Shutdown(ctx context.Context) error {
 }
 
 func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
+	//var err error
+
 	// Apply read/write timeouts to the server connection.
 	conn = utils.ObeyIdleTimeout(conn,
 		defaults.ReverseTunnelAgentHeartbeatPeriod*10,
 		"reverse tunnel server")
 
-	ct := nch.ChannelType()
-	if ct != chanHeartbeat {
+	channelType := nch.ChannelType()
+	switch channelType {
+	case chanHeartbeat:
+		s.handleHeartbeat(conn, sconn, nch)
+	case "auth":
+		servers, err := s.LocalAuthClient.GetAuthServers()
+		if err != nil {
+			s.Errorf("Failed to get list of Auth Servers: %v.", err)
+			nch.Reject(ssh.ConnectionFailed, fmt.Sprintf("request for %v channel failed", "auth"))
+			return
+		}
+		var conn net.Conn
+		for _, s := range servers {
+			conn, err = net.Dial("tcp", s.GetAddr())
+			if err != nil {
+				log.Errorf("Dial to Auth Server %v failed: %v.", s.GetAddr(), err)
+				continue
+			}
+		}
+		if conn == nil {
+			log.Errorf("!!!!!!!!!!!! Dial to Auth Server failed: %v.", err)
+			nch.Reject(ssh.ConnectionFailed, fmt.Sprintf("request for %v channel failed", "auth"))
+			return
+		}
+		channel, _, err := nch.Accept()
+		if err != nil {
+			log.Errorf("Failed to accept on channel: %v.", err)
+			sconn.Close()
+			return
+		}
+		fmt.Printf("--> PROXYING OVER HERE!\n")
+		go io.Copy(conn, channel)
+		go io.Copy(channel, conn)
+	default:
 		msg := fmt.Sprintf("reversetunnel received unknown channel request %v from %v",
 			nch.ChannelType(), sconn)
+
 		// if someone is trying to open a new SSH session by talking to a reverse tunnel,
 		// they're most likely using the wrong port number. Lets give them the explicit hint:
-		if ct == "session" {
+		if channelType == "session" {
 			msg = "Cannot open new SSH session on reverse tunnel. Are you connecting to the right port?"
 		}
-		s.Warning(msg)
+		s.Warn(msg)
 		nch.Reject(ssh.ConnectionFailed, msg)
 		return
 	}
+}
+
+func (s *server) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
 	s.Debugf("New tunnel from %v.", sconn.RemoteAddr())
 	if sconn.Permissions.Extensions[extCertType] != extCertTypeHost {
 		s.Error(trace.BadParameter("can't retrieve certificate type in certType"))
@@ -550,22 +588,6 @@ func (s *server) handleNewNode(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	go cluster.handleHeartbeat(rconn, ch, req)
 }
 
-func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
-	// Cluster name was extracted from certificate and packed into extensions.
-	clusterName := sconn.Permissions.Extensions[extAuthority]
-	if strings.TrimSpace(clusterName) == "" {
-		return nil, trace.BadParameter("empty cluster name")
-	}
-
-	for _, ls := range s.localSites {
-		if ls.domainName == clusterName {
-			return ls, nil
-		}
-	}
-
-	return nil, trace.BadParameter("local cluster %v not found", clusterName)
-}
-
 func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn, nch ssh.NewChannel) {
 	// add the incoming site (cluster) to the list of active connections:
 	site, remoteConn, err := s.upsertSite(conn, sshConn)
@@ -582,6 +604,22 @@ func (s *server) handleNewCluster(conn net.Conn, sshConn *ssh.ServerConn, nch ss
 		return
 	}
 	go site.handleHeartbeat(remoteConn, ch, req)
+}
+
+func (s *server) findLocalCluster(sconn *ssh.ServerConn) (*localSite, error) {
+	// Cluster name was extracted from certificate and packed into extensions.
+	clusterName := sconn.Permissions.Extensions[extAuthority]
+	if strings.TrimSpace(clusterName) == "" {
+		return nil, trace.BadParameter("empty cluster name")
+	}
+
+	for _, ls := range s.localSites {
+		if ls.domainName == clusterName {
+			return ls, nil
+		}
+	}
+
+	return nil, trace.BadParameter("local cluster %v not found", clusterName)
 }
 
 // isHostAuthority is called during checking the client key, to see if the signing

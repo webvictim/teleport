@@ -18,6 +18,7 @@ package reversetunnel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"sync"
 	"time"
@@ -59,6 +60,8 @@ type AgentPoolConfig struct {
 	AccessPoint auth.AccessPoint
 	// HostSigners is a list of host signers this agent presents itself as
 	HostSigners []ssh.Signer
+	// TLSConfig
+	TLSConfig *tls.Config
 	// HostUUID is a unique ID of this host
 	HostUUID string
 	// Context is an optional context
@@ -300,6 +303,7 @@ func (m *AgentPool) addAgent(key agentKey, discoverProxies []services.Server) er
 		ClusterName:     clusterName,
 		Username:        m.cfg.HostUUID,
 		Signers:         m.cfg.HostSigners,
+		TLSConfig:       m.cfg.TLSConfig,
 		Client:          m.cfg.Client,
 		AccessPoint:     m.cfg.AccessPoint,
 		Context:         m.ctx,
