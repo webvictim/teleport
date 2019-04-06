@@ -17,11 +17,16 @@ limitations under the License.
 package auth
 
 import (
+	"bytes"
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"io/ioutil"
+	"net/http"
 	"strings"
 
 	"github.com/gravitational/teleport"
+	//"github.com/gravitational/teleport/lib/client"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/tlsca"
@@ -97,15 +102,97 @@ type RegisterParams struct {
 func Register(params RegisterParams) (*Identity, error) {
 	// Read in the token. The token can either be passed in or come from a file
 	// on disk.
-	tok, err := readToken(params.Token)
+	token, err := readToken(params.Token)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
+	var registerWithAuth bool
+	if registerWithAuth {
+		return registerThroughAuth(token, params)
+	}
+	return registerThroughProxy(token, params)
+}
+
+func registerThroughProxy(token string, params RegisterParams) (*Identity, error) {
+	log.Debugf("Registering through proxy.")
+	//	keys, err := client.HostCredentials(context.Background(), params.Servers[0].String(), true, nil,
+	//		auth.RegisterUsingTokenRequest{
+	//			Token:                token,
+	//			HostID:               params.ID.HostUUID,
+	//			NodeName:             params.ID.NodeName,
+	//			Role:                 params.ID.Role,
+	//			AdditionalPrincipals: params.AdditionalPrincipals,
+	//			DNSNames:             params.DNSNames,
+	//			PublicTLSKey:         params.PublicTLSKey,
+	//			PublicSSHKey:         params.PublicSSHKey,
+	//		})
+	keys, err := hostCredentials(token, params)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return ReadIdentityFromKeyPair(
+		params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts)
+}
+
+func hostCredentials(token string, params RegisterParams) (*PackedKeys, error) {
+	buf, err := json.Marshal(RegisterUsingTokenRequest{
+		Token:                token,
+		HostID:               params.ID.HostUUID,
+		NodeName:             params.ID.NodeName,
+		Role:                 params.ID.Role,
+		AdditionalPrincipals: params.AdditionalPrincipals,
+		DNSNames:             params.DNSNames,
+		PublicTLSKey:         params.PublicTLSKey,
+		PublicSSHKey:         params.PublicSSHKey,
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	// TODO: Hardcoded, fix this.
+	req, err := http.NewRequest("POST", "https://localhost:3080/v1/webapi/host/credentials", bytes.NewBuffer(buf))
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	// TODO: Insecure, fix this.
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	var packedKeys *PackedKeys
+	err = json.Unmarshal(body, &packedKeys)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return packedKeys, nil
+}
+
+func registerThroughAuth(token string, params RegisterParams) (*Identity, error) {
+	log.Debugf("Registering through auth.")
+
+	var client *Client
+	var err error
+
 	// Build a client to the Auth Server. If a CA pin is specified require the
 	// Auth Server is validated. Otherwise attempt to use the CA file on disk
 	// but if it's not available connect without validating the Auth Server CA.
-	var client *Client
 	switch {
 	case params.CAPin != "":
 		client, err = pinRegisterClient(params)
@@ -119,7 +206,7 @@ func Register(params RegisterParams) (*Identity, error) {
 
 	// Get the SSH and X509 certificates for a node.
 	keys, err := client.RegisterUsingToken(RegisterUsingTokenRequest{
-		Token:                tok,
+		Token:                token,
 		HostID:               params.ID.HostUUID,
 		NodeName:             params.ID.NodeName,
 		Role:                 params.ID.Role,

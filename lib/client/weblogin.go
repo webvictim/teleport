@@ -511,6 +511,26 @@ func SSHAgentU2FLogin(ctx context.Context, proxyAddr, user, password string, pub
 	return out, nil
 }
 
+func HostCredentials(ctx context.Context, proxyAddr string, insecure bool, pool *x509.CertPool, req auth.RegisterUsingTokenRequest) (*auth.PackedKeys, error) {
+	clt, _, err := initClient(proxyAddr, insecure, pool)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	resp, err := clt.PostJSON(ctx, clt.Endpoint("webapi", "host", "credentials"), req)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	var packedKeys *auth.PackedKeys
+	err = json.Unmarshal(resp.Bytes(), &packedKeys)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return packedKeys, nil
+}
+
 // initClient creates and initializes HTTPS client for talking to teleport proxy HTTPS
 // endpoint.
 func initClient(proxyAddr string, insecure bool, pool *x509.CertPool) (*WebClient, *url.URL, error) {

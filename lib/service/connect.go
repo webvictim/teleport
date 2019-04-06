@@ -17,6 +17,8 @@ limitations under the License.
 package service
 
 import (
+	"context"
+	"net"
 	"path/filepath"
 	"time"
 
@@ -743,6 +745,58 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 }
 
 func (process *TeleportProcess) newClient(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
+	if process.getLocalAuth() != nil {
+		return process.newClientDirect(authServers, identity)
+	}
+	return process.newClientThroughTunnel(authServers, identity)
+}
+
+func (process *TeleportProcess) newClientThroughTunnel(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
+	log.Debugf("Creating client to Auth Server through tunnel.")
+
+	cert, ok := identity.KeySigner.PublicKey().(*ssh.Certificate)
+	if !ok {
+		return nil, trace.BadParameter("no cert found")
+	}
+
+	//dialer := proxy.DialerFromEnvironment(a.Addr.Addr)
+	//conn, err = dialer.Dial(a.Addr.AddrNetwork, a.Addr.Addr, &ssh.ClientConfig{
+	conn, err := ssh.Dial("tcp", "localhost:3024", &ssh.ClientConfig{
+		User: cert.ValidPrincipals[0],
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(identity.KeySigner),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		//HostKeyCallback: a.hostKeyCallback,
+		Timeout: defaults.DefaultDialTimeout,
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	authDialer := func(in context.Context, network, addr string) (net.Conn, error) {
+		authCh, _, err := conn.OpenChannel("auth", nil)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return utils.NewChConn(conn.Conn, authCh), nil
+	}
+
+	tlsConfig, err := identity.TLSConfig(process.Config.CipherSuites)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	clt, err := auth.NewTLSClientWithDialer(authDialer, tlsConfig)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return clt, nil
+}
+
+func (process *TeleportProcess) newClientDirect(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
+	log.Debugf("Creating client to Auth Server with direct connection.")
+
 	tlsConfig, err := identity.TLSConfig(process.Config.CipherSuites)
 	if err != nil {
 		return nil, trace.Wrap(err)

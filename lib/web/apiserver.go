@@ -223,6 +223,9 @@ func NewHandler(cfg Config, opts ...HandlerOption) (*RewritingHandler, error) {
 	h.GET("/webapi/user/status", h.WithAuth(h.getUserStatus))
 	h.GET("/webapi/user/context", h.WithAuth(h.getUserContext))
 
+	// Issue host credentials.
+	h.POST("/webapi/host/credentials", httplib.MakeHandler(h.credentials))
+
 	// if Web UI is enabled, check the assets dir:
 	var (
 		indexPage *template.Template
@@ -1737,6 +1740,32 @@ func (h *Handler) siteSessionEventsGet(w http.ResponseWriter, r *http.Request, p
 		return nil, trace.Wrap(err)
 	}
 	return eventsListGetResponse{Events: e}, nil
+}
+
+func (h *Handler) credentials(w http.ResponseWriter, r *http.Request, p httprouter.Params) (interface{}, error) {
+	var req auth.RegisterUsingTokenRequest
+	if err := httplib.ReadJSON(r, &req); err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	authClient := h.cfg.ProxyClient
+	packedKeys, err := authClient.RegisterUsingToken(req)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	return packedKeys, nil
+
+	//auth.RegisterUsingTokenRequest{
+	//    Token:                tok,
+	//    HostID:               params.ID.HostUUID,
+	//    NodeName:             params.ID.NodeName,
+	//    Role:                 params.ID.Role,
+	//    AdditionalPrincipals: params.AdditionalPrincipals,
+	//    DNSNames:             params.DNSNames,
+	//    PublicTLSKey:         params.PublicTLSKey,
+	//    PublicSSHKey:         params.PublicSSHKey,
+	//})
 }
 
 // createSSHCert is a web call that generates new SSH certificate based

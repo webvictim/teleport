@@ -531,7 +531,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 			}
 			tlsConfig := a.TLSConfig.Clone()
 			tlsConfig.RootCAs = pool
-			//tlsConfig.ServerName = auth.EncodeClusterName("example.com")
+			tlsConfig.ServerName = auth.EncodeClusterName("example.com")
 			clt, err := auth.NewTLSClientWithDialer(authDialer, tlsConfig)
 			if err != nil {
 				fmt.Printf("--> NEW: 2 err: %v.\n", err)
