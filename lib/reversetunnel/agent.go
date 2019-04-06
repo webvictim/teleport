@@ -505,47 +505,47 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 		return trace.Wrap(err)
 	}
 
-	go func() {
-		authDialer := func(in context.Context, network, addr string) (net.Conn, error) {
-			authCh, _, err := conn.OpenChannel("auth", nil)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			return utils.NewChConn(conn.Conn, authCh), nil
-		}
+	//go func() {
+	//	authDialer := func(in context.Context, network, addr string) (net.Conn, error) {
+	//		authCh, _, err := conn.OpenChannel("auth", nil)
+	//		if err != nil {
+	//			return nil, trace.Wrap(err)
+	//		}
+	//		return utils.NewChConn(conn.Conn, authCh), nil
+	//	}
 
-		for i := 0; i < 10; i++ {
-			// check if all cert authorities are initiated and if everything is OK
-			ca, err := a.AccessPoint.GetCertAuthority(services.CertAuthID{
-				Type:       services.HostCA,
-				DomainName: a.ClusterName,
-			}, false)
-			if err != nil {
-				fmt.Printf("--> NEW: 0 err: %v.\n", err)
-				continue
-			}
-			pool, err := services.CertPool(ca)
-			if err != nil {
-				fmt.Printf("--> NEW: 1 err: %v.\n", err)
-				continue
-			}
-			tlsConfig := a.TLSConfig.Clone()
-			tlsConfig.RootCAs = pool
-			tlsConfig.ServerName = auth.EncodeClusterName("example.com")
-			clt, err := auth.NewTLSClientWithDialer(authDialer, tlsConfig)
-			if err != nil {
-				fmt.Printf("--> NEW: 2 err: %v.\n", err)
-				continue
-			}
-			clusterConfig, err := clt.GetClusterConfig()
-			if err != nil {
-				fmt.Printf("--> NEW: 3 err: %v.\n", err)
-				continue
-			}
-			fmt.Printf("--> NEW!! clusterConfig=%v.\n", clusterConfig)
-			time.Sleep(2 * time.Second)
-		}
-	}()
+	//	for i := 0; i < 10; i++ {
+	//		// check if all cert authorities are initiated and if everything is OK
+	//		ca, err := a.AccessPoint.GetCertAuthority(services.CertAuthID{
+	//			Type:       services.HostCA,
+	//			DomainName: a.ClusterName,
+	//		}, false)
+	//		if err != nil {
+	//			fmt.Printf("--> NEW: 0 err: %v.\n", err)
+	//			continue
+	//		}
+	//		pool, err := services.CertPool(ca)
+	//		if err != nil {
+	//			fmt.Printf("--> NEW: 1 err: %v.\n", err)
+	//			continue
+	//		}
+	//		tlsConfig := a.TLSConfig.Clone()
+	//		tlsConfig.RootCAs = pool
+	//		tlsConfig.ServerName = auth.EncodeClusterName("example.com")
+	//		clt, err := auth.NewTLSClientWithDialer(authDialer, tlsConfig)
+	//		if err != nil {
+	//			fmt.Printf("--> NEW: 2 err: %v.\n", err)
+	//			continue
+	//		}
+	//		clusterConfig, err := clt.GetClusterConfig()
+	//		if err != nil {
+	//			fmt.Printf("--> NEW: 3 err: %v.\n", err)
+	//			continue
+	//		}
+	//		fmt.Printf("--> NEW!! clusterConfig=%v.\n", clusterConfig)
+	//		time.Sleep(2 * time.Second)
+	//	}
+	//}()
 
 	newTransportC := conn.HandleChannelOpen(chanTransport)
 	newDiscoveryC := conn.HandleChannelOpen(chanDiscovery)

@@ -91,6 +91,8 @@ type localSite struct {
 
 	// remoteConns
 	remoteConns map[string]*remoteConn
+
+	closeContext context.Con
 }
 
 // GetTunnelsCount always returns 1 for local cluster
@@ -293,9 +295,9 @@ func (s *localSite) handleHeartbeat(rconn *remoteConn, ch ssh.Channel, reqC <-ch
 
 	for {
 		select {
-		//case <-s.ctx.Done():
-		//	s.Infof("closing")
-		//	return
+		case <-s.srv.ctx.Done():
+			s.Infof("closing")
+			return
 		case req := <-reqC:
 			if req == nil {
 				s.log.Infof("Cluster agent disconnected.")

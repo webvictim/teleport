@@ -711,24 +711,24 @@ func (s *server) keyAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 				"role":       cert.Extensions["x-teleport-role"],
 			},
 		}, nil
-	case ssh.UserCert:
-		certChecker := utils.CertChecker{
-			CertChecker: ssh.CertChecker{
-				IsUserAuthority: s.isUserAuthority,
-			},
-		}
-		_, err := certChecker.Authenticate(conn, key)
-		if err != nil {
-			logger.Warningf("Failed to authenticate user, err: %v.", err)
-			return nil, err
-		}
+	//case ssh.UserCert:
+	//	certChecker := utils.CertChecker{
+	//		CertChecker: ssh.CertChecker{
+	//			IsUserAuthority: s.isUserAuthority,
+	//		},
+	//	}
+	//	_, err := certChecker.Authenticate(conn, key)
+	//	if err != nil {
+	//		logger.Warningf("Failed to authenticate user, err: %v.", err)
+	//		return nil, err
+	//	}
 
-		return &ssh.Permissions{
-			Extensions: map[string]string{
-				extHost:     conn.User(),
-				extCertType: extCertTypeUser,
-			},
-		}, nil
+	//	return &ssh.Permissions{
+	//		Extensions: map[string]string{
+	//			extHost:     conn.User(),
+	//			extCertType: extCertTypeUser,
+	//		},
+	//	}, nil
 	default:
 		return nil, trace.BadParameter("unsupported cert type: %v", cert.CertType)
 	}
