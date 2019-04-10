@@ -17,6 +17,7 @@ limitations under the License.
 package reversetunnel
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -92,7 +93,7 @@ type localSite struct {
 	// remoteConns
 	remoteConns map[string]*remoteConn
 
-	closeContext context.Con
+	closeContext context.Context
 }
 
 // GetTunnelsCount always returns 1 for local cluster
@@ -296,7 +297,7 @@ func (s *localSite) handleHeartbeat(rconn *remoteConn, ch ssh.Channel, reqC <-ch
 	for {
 		select {
 		case <-s.srv.ctx.Done():
-			s.Infof("closing")
+			s.log.Infof("closing")
 			return
 		case req := <-reqC:
 			if req == nil {

@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -57,7 +58,7 @@ func LocalRegister(id IdentityID, authServer *AuthServer, additionalPrincipals, 
 		return nil, trace.Wrap(err)
 	}
 
-	identity, err := ReadIdentityFromKeyPair(keys.Key, keys.Cert, keys.TLSCert, keys.TLSCACerts)
+	identity, err := ReadIdentityFromKeyPair(keys.Key, keys.Cert, keys.TLSCert, keys.TLSCACerts, keys.SSHCACerts)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -133,7 +134,7 @@ func registerThroughProxy(token string, params RegisterParams) (*Identity, error
 	}
 
 	return ReadIdentityFromKeyPair(
-		params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts)
+		params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts, keys.SSHCACerts)
 }
 
 func hostCredentials(token string, params RegisterParams) (*PackedKeys, error) {
@@ -181,6 +182,8 @@ func hostCredentials(token string, params RegisterParams) (*PackedKeys, error) {
 		return nil, trace.Wrap(err)
 	}
 
+	fmt.Printf("--> hostCredentials: %v.\n", len(packedKeys.SSHCACerts))
+
 	return packedKeys, nil
 }
 
@@ -220,7 +223,7 @@ func registerThroughAuth(token string, params RegisterParams) (*Identity, error)
 	}
 
 	return ReadIdentityFromKeyPair(
-		params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts)
+		params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts, keys.SSHCACerts)
 }
 
 // insecureRegisterClient attempts to connects to the Auth Server using the
@@ -366,7 +369,7 @@ func ReRegister(params ReRegisterParams) (*Identity, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return ReadIdentityFromKeyPair(params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts)
+	return ReadIdentityFromKeyPair(params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts, keys.SSHCACerts)
 }
 
 func readToken(token string) (string, error) {
@@ -393,4 +396,6 @@ type PackedKeys struct {
 	TLSCert []byte `json:"tls_cert"`
 	// TLSCACerts is a list of certificate authorities
 	TLSCACerts [][]byte `json:"tls_ca_certs"`
+	// SSHCACerts
+	SSHCACerts [][]byte `json:"ssh_ca_certs"`
 }

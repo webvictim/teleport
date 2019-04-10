@@ -409,10 +409,10 @@ func migrateLegacyResources(cfg InitConfig, asrv *AuthServer) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	err = migrateIdentities(cfg.DataDir)
-	if err != nil {
-		return trace.Wrap(err)
-	}
+	//err = migrateIdentities(cfg.DataDir)
+	//if err != nil {
+	//	return trace.Wrap(err)
+	//}
 	err = migrateAdminRole(asrv)
 	if err != nil {
 		return trace.Wrap(err)
@@ -420,41 +420,41 @@ func migrateLegacyResources(cfg InitConfig, asrv *AuthServer) error {
 	return nil
 }
 
-func migrateIdentities(dataDir string) error {
-	storage, err := NewProcessStorage(context.TODO(), filepath.Join(dataDir, teleport.ComponentProcess))
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	defer storage.Close()
-	for _, role := range []teleport.Role{teleport.RoleAdmin, teleport.RoleProxy, teleport.RoleNode} {
-		if err := migrateIdentity(role, dataDir, storage); err != nil {
-			return trace.Wrap(err)
-		}
-	}
-	return nil
-}
+//func migrateIdentities(dataDir string) error {
+//	storage, err := NewProcessStorage(context.TODO(), filepath.Join(dataDir, teleport.ComponentProcess))
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	defer storage.Close()
+//	for _, role := range []teleport.Role{teleport.RoleAdmin, teleport.RoleProxy, teleport.RoleNode} {
+//		if err := migrateIdentity(role, dataDir, storage); err != nil {
+//			return trace.Wrap(err)
+//		}
+//	}
+//	return nil
+//}
 
-func migrateIdentity(role teleport.Role, dataDir string, storage *ProcessStorage) error {
-	identity, err := readIdentityCompat(dataDir, IdentityID{Role: role})
-	if err != nil {
-		if !trace.IsNotFound(err) {
-			return trace.Wrap(err)
-		}
-		return nil
-	}
-	err = storage.WriteIdentity(IdentityCurrent, *identity)
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	err = removeIdentityCompat(dataDir, IdentityID{Role: role})
-	if err != nil {
-		if !trace.IsNotFound(err) {
-			return trace.Wrap(err)
-		}
-	}
-	log.Infof("Identity %v has been migrated to new on-disk format.", role)
-	return nil
-}
+//func migrateIdentity(role teleport.Role, dataDir string, storage *ProcessStorage) error {
+//	identity, err := readIdentityCompat(dataDir, IdentityID{Role: role})
+//	if err != nil {
+//		if !trace.IsNotFound(err) {
+//			return trace.Wrap(err)
+//		}
+//		return nil
+//	}
+//	err = storage.WriteIdentity(IdentityCurrent, *identity)
+//	if err != nil {
+//		return trace.Wrap(err)
+//	}
+//	err = removeIdentityCompat(dataDir, IdentityID{Role: role})
+//	if err != nil {
+//		if !trace.IsNotFound(err) {
+//			return trace.Wrap(err)
+//		}
+//	}
+//	log.Infof("Identity %v has been migrated to new on-disk format.", role)
+//	return nil
+//}
 
 func migrateAdminRole(asrv *AuthServer) error {
 	defaultRole := services.NewAdminRole()
@@ -501,7 +501,7 @@ func GenerateIdentity(a *AuthServer, id IdentityID, additionalPrincipals, dnsNam
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return ReadIdentityFromKeyPair(keys.Key, keys.Cert, keys.TLSCert, keys.TLSCACerts)
+	return ReadIdentityFromKeyPair(keys.Key, keys.Cert, keys.TLSCert, keys.TLSCACerts, keys.SSHCACerts)
 }
 
 // Identity is collection of certificates and signers that represent server identity
@@ -517,6 +517,8 @@ type Identity struct {
 	// TLSCACertBytes is a list of PEM encoded TLS x509 certificate of certificate authority
 	// associated with auth server services
 	TLSCACertsBytes [][]byte
+	// SSHCACertBytes
+	SSHCACertBytes [][]byte
 	// KeySigner is an SSH host certificate signer
 	KeySigner ssh.Signer
 	// Cert is a parsed SSH certificate
@@ -655,11 +657,12 @@ func (id *IdentityID) String() string {
 }
 
 // ReadIdentityFromKeyPair reads TLS identity from key pair
-func ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes []byte, tlsCACertsBytes [][]byte) (*Identity, error) {
+func ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes []byte, tlsCACertsBytes [][]byte, sshCACertBytes [][]byte) (*Identity, error) {
 	identity, err := ReadSSHIdentityFromKeyPair(keyBytes, sshCertBytes)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
+	identity.SSHCACertBytes = sshCACertBytes
 	if len(tlsCertBytes) != 0 {
 		// just to verify that identity parses properly for future use
 		i, err := ReadTLSIdentityFromKeyPair(keyBytes, tlsCertBytes, tlsCACertsBytes)
@@ -876,47 +879,47 @@ func migrateRemoteClusters(asrv *AuthServer) error {
 	return nil
 }
 
-// DELETE IN(2.7.0)
-// readIdentityCompat reads, parses and returns the given pub/pri key + cert from the
-// key storage (dataDir). Used for data migrations
-func readIdentityCompat(dataDir string, id IdentityID) (i *Identity, err error) {
-	path := keysPath(dataDir, id)
-
-	keyBytes, err := utils.ReadPath(path.key)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	sshCertBytes, err := utils.ReadPath(path.sshCert)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	// initially ignore absence of TLS identity for read purposes
-	tlsCertBytes, err := utils.ReadPath(path.tlsCert)
-	if err != nil {
-		if !trace.IsNotFound(err) {
-			return nil, trace.Wrap(err)
-		}
-	}
-
-	tlsCACertBytes, err := utils.ReadPath(path.tlsCACert)
-	if err != nil {
-		if !trace.IsNotFound(err) {
-			return nil, trace.Wrap(err)
-		}
-	}
-
-	identity, err := ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes, [][]byte{tlsCACertBytes})
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	// Inject nodename back into identity read from disk.
-	identity.ID.NodeName = id.NodeName
-
-	return identity, nil
-}
+//// DELETE IN(2.7.0)
+//// readIdentityCompat reads, parses and returns the given pub/pri key + cert from the
+//// key storage (dataDir). Used for data migrations
+//func readIdentityCompat(dataDir string, id IdentityID) (i *Identity, err error) {
+//	path := keysPath(dataDir, id)
+//
+//	keyBytes, err := utils.ReadPath(path.key)
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//
+//	sshCertBytes, err := utils.ReadPath(path.sshCert)
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//
+//	// initially ignore absence of TLS identity for read purposes
+//	tlsCertBytes, err := utils.ReadPath(path.tlsCert)
+//	if err != nil {
+//		if !trace.IsNotFound(err) {
+//			return nil, trace.Wrap(err)
+//		}
+//	}
+//
+//	tlsCACertBytes, err := utils.ReadPath(path.tlsCACert)
+//	if err != nil {
+//		if !trace.IsNotFound(err) {
+//			return nil, trace.Wrap(err)
+//		}
+//	}
+//
+//	identity, err := ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes, [][]byte{tlsCACertBytes}, )
+//	if err != nil {
+//		return nil, trace.Wrap(err)
+//	}
+//
+//	// Inject nodename back into identity read from disk.
+//	identity.ID.NodeName = id.NodeName
+//
+//	return identity, nil
+//}
 
 // DELETE IN(2.7.0)
 type paths struct {

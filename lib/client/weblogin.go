@@ -314,6 +314,9 @@ type SSHProxySettings struct {
 
 	// SSHPublicAddr is the public address of the SSH proxy.
 	SSHPublicAddr string `json:"ssh_public_addr,omitempty"`
+
+	// TunnelListenAddr
+	TunnelListenAddr string `json:"tunnel_listen_addr,omitempty"`
 }
 
 // PingResponse contains the form of authentication the auth server supports.

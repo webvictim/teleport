@@ -926,6 +926,7 @@ func (s *AuthServer) GenerateServerKeys(req GenerateServerKeysRequest) (*PackedK
 		Cert:       hostSSHCert,
 		TLSCert:    hostTLSCert,
 		TLSCACerts: services.TLSCerts(ca),
+		SSHCACerts: ca.GetCheckingKeys(),
 	}, nil
 }
 

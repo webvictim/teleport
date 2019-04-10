@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 	"time"
@@ -27,13 +28,18 @@ import (
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/backend"
+	"github.com/gravitational/teleport/lib/client"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
+	"github.com/gravitational/teleport/lib/sshutils"
 	"github.com/gravitational/teleport/lib/tlsca"
 	"github.com/gravitational/teleport/lib/utils"
+	"github.com/gravitational/teleport/lib/utils/proxy"
 
 	"github.com/gravitational/trace"
 )
+
+var _ = fmt.Printf
 
 // reconnectToAuthService continuously attempts to reconnect to the auth
 // service until succeeds or process gets shut down
@@ -745,30 +751,88 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 }
 
 func (process *TeleportProcess) newClient(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
-	if process.getLocalAuth() != nil {
-		return process.newClientDirect(authServers, identity)
+	directClient, err := process.newClientDirect(authServers, identity)
+	if err != nil {
+		return nil, trace.Wrap(err)
 	}
-	return process.newClientThroughTunnel(authServers, identity)
+
+	// Try and connect to the Auth Server. If the request fails, try and
+	// connect through a tunnel.
+	log.Debugf("Attempting to connect to Auth Server directly.")
+	_, err = directClient.GetDomainName()
+	if err != nil {
+		log.Debugf("Attempting to connect to Auth Server through tunnel.")
+		tunnelClient, er := process.newClientThroughTunnel(authServers, identity)
+		if er != nil {
+			return nil, trace.NewAggregate(err, er)
+		}
+
+		log.Debugf("Connected to Auth Server through tunnel.")
+		return tunnelClient, nil
+	}
+
+	log.Debugf("Connected to Auth Server with direct connection.")
+	return directClient, nil
 }
 
-func (process *TeleportProcess) newClientThroughTunnel(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
-	log.Debugf("Creating client to Auth Server through tunnel.")
+func discoverProxy(addrs []utils.NetAddr) (string, error) {
+	var errs []error
+	for _, addr := range addrs {
+		// TODO: Pass in insecure flag instead of hardcoding it here.
+		resp, err := client.Ping(context.Background(), addr.String(), true, nil, "")
+		if err == nil {
+			host, err := utils.Host(resp.Proxy.SSH.PublicAddr)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			_, port, err := net.SplitHostPort(resp.Proxy.SSH.TunnelListenAddr)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			return net.JoinHostPort(host, port), nil
+		}
+		errs = append(errs, err)
+	}
+	return "", trace.NewAggregate(errs...)
+}
 
-	cert, ok := identity.KeySigner.PublicKey().(*ssh.Certificate)
-	if !ok {
-		return nil, trace.BadParameter("no cert found")
+func (process *TeleportProcess) newClientThroughTunnel(servers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
+	keyAuth := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		cert, ok := key.(*ssh.Certificate)
+		if !ok {
+			return trace.BadParameter("only host certificates supported")
+		}
+		for _, key := range identity.SSHCACertBytes {
+			pubkey, _, _, _, err := ssh.ParseAuthorizedKey(key)
+			if err != nil {
+				log.Debugf("Failed to parse public key: %v.", err)
+				continue
+			}
+			if sshutils.KeysEqual(cert.SignatureKey, pubkey) {
+				return nil
+			}
+		}
+
+		return trace.BadParameter("no matching keys found")
 	}
 
-	//dialer := proxy.DialerFromEnvironment(a.Addr.Addr)
-	//conn, err = dialer.Dial(a.Addr.AddrNetwork, a.Addr.Addr, &ssh.ClientConfig{
-	conn, err := ssh.Dial("tcp", "localhost:3024", &ssh.ClientConfig{
-		User: cert.ValidPrincipals[0],
+	// Discover address of SSH reverse tunnel server.
+	proxyAddr, err := discoverProxy(servers)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	log.Debugf("Discovered address for reverse tunnel server: %v.", proxyAddr)
+
+	dialer := proxy.DialerFromEnvironment(proxyAddr)
+	conn, err := dialer.Dial("tcp", proxyAddr, &ssh.ClientConfig{
+		User: identity.ID.HostUUID,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(identity.KeySigner),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		//HostKeyCallback: a.hostKeyCallback,
-		Timeout: defaults.DefaultDialTimeout,
+		HostKeyCallback: keyAuth,
+		Timeout:         defaults.DefaultDialTimeout,
 	})
 	if err != nil {
 		return nil, trace.Wrap(err)
@@ -795,8 +859,6 @@ func (process *TeleportProcess) newClientThroughTunnel(authServers []utils.NetAd
 }
 
 func (process *TeleportProcess) newClientDirect(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
-	log.Debugf("Creating client to Auth Server with direct connection.")
-
 	tlsConfig, err := identity.TLSConfig(process.Config.CipherSuites)
 	if err != nil {
 		return nil, trace.Wrap(err)

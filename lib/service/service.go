@@ -1941,7 +1941,8 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 				Enabled: cfg.Proxy.Kube.Enabled,
 			},
 			SSH: client.SSHProxySettings{
-				ListenAddr: cfg.Proxy.SSHAddr.String(),
+				ListenAddr:       cfg.Proxy.SSHAddr.String(),
+				TunnelListenAddr: cfg.Proxy.ReverseTunnelListenAddr.String(),
 			},
 		}
 		if len(cfg.Proxy.PublicAddrs) > 0 {

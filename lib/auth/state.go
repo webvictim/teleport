@@ -130,7 +130,7 @@ func (p *ProcessStorage) ReadIdentity(name string, role teleport.Role) (*Identit
 	if err := utils.UnmarshalWithSchema(GetIdentitySchema(), &res, item.Value); err != nil {
 		return nil, trace.BadParameter(err.Error())
 	}
-	return ReadIdentityFromKeyPair(res.Spec.Key, res.Spec.SSHCert, res.Spec.TLSCert, res.Spec.TLSCACerts)
+	return ReadIdentityFromKeyPair(res.Spec.Key, res.Spec.SSHCert, res.Spec.TLSCert, res.Spec.TLSCACerts, res.Spec.SSHCACerts)
 }
 
 // WriteIdentity writes identity to the backend.
@@ -148,6 +148,7 @@ func (p *ProcessStorage) WriteIdentity(name string, id Identity) error {
 			SSHCert:    id.CertBytes,
 			TLSCert:    id.TLSCertBytes,
 			TLSCACerts: id.TLSCACertsBytes,
+			SSHCACerts: id.SSHCACertBytes,
 		},
 	}
 	if err := res.CheckAndSetDefaults(); err != nil {
@@ -157,6 +158,7 @@ func (p *ProcessStorage) WriteIdentity(name string, id Identity) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
+	fmt.Printf("--> WriteIdentity: writing %v to disk.\n", string(value))
 	item := backend.Item{
 		Key:   backend.Key(idsPrefix, strings.ToLower(id.ID.Role.String()), name),
 		Value: value,
@@ -220,6 +222,9 @@ func (s *IdentityV2) CheckAndSetDefaults() error {
 	if len(s.Spec.TLSCACerts) == 0 {
 		return trace.BadParameter("missing parameter TLSCACerts")
 	}
+	if len(s.Spec.SSHCACerts) == 0 {
+		return trace.BadParameter("missing parameter SSH CA bytes")
+	}
 	return nil
 }
 
@@ -234,6 +239,8 @@ type IdentitySpecV2 struct {
 	// TLSCACert is a list of PEM encoded x509 certificate of the
 	// certificate authority of the cluster.
 	TLSCACerts [][]byte `json:"tls_ca_certs,omitempty"`
+	// SSHCACerts
+	SSHCACerts [][]byte `json:"ssh_ca_certs,omitempty"`
 }
 
 // IdentitySpecV2Schema is a schema for identity spec.
@@ -246,6 +253,10 @@ const IdentitySpecV2Schema = `{
     "ssh_cert": {"type": "string"},
     "tls_cert": {"type": "string"},
     "tls_ca_certs": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "ssh_ca_certs": {
       "type": "array",
       "items": {"type": "string"}
     }
