@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -34,6 +35,10 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
+
+type ServerHandler interface {
+	HandleConnection(conn net.Conn)
+}
 
 // AgentPool manages the pool of outbound reverse tunnel agents.
 // The agent pool watches the reverse tunnel entries created by the admin and
@@ -73,6 +78,8 @@ type AgentPoolConfig struct {
 	Clock clockwork.Clock
 	// KubeDialAddr is an address of a kubernetes proxy
 	KubeDialAddr utils.NetAddr
+	// Server
+	Server ServerHandler
 	// Component
 	Component string
 }
@@ -310,6 +317,7 @@ func (m *AgentPool) addAgent(key agentKey, discoverProxies []services.Server) er
 		DiscoveryC:      m.discoveryC,
 		DiscoverProxies: discoverProxies,
 		KubeDialAddr:    m.cfg.KubeDialAddr,
+		Server:          m.cfg.Server,
 	})
 	if err != nil {
 		return trace.Wrap(err)

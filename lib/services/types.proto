@@ -80,7 +80,7 @@ message ResourceHeader {
     // Kind is a resource kind
     string Kind = 1 [(gogoproto.jsontag) = "kind,omitempty"];
     // SubKind is an optional resource sub kind, used in some resources
-	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];    
+	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
 	// Version is version
     string Version = 3 [(gogoproto.jsontag) = "version,omitempty"];
 	// Metadata is User metadata
@@ -96,9 +96,9 @@ message ServerV2 {
     string Kind = 1 [(gogoproto.jsontag) = "kind"];
     // SubKind is an optional resource sub kind, used in some resources
 	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
-	// Version is version    
+	// Version is version
     string Version = 3 [(gogoproto.jsontag) = "version"];
-	// Metadata is User metadata    
+	// Metadata is User metadata
     Metadata Metadata = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "metadata"];
     // Spec is a server spec
     ServerSpecV2 Spec = 5 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "spec"];
@@ -116,6 +116,8 @@ message ServerSpecV2  {
 	map <string, CommandLabelV2> CmdLabels = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "cmd_labels,omitempty"];
 	// Rotation specifies server rotation
 	Rotation Rotation  = 5 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "rotation,omitempty"];
+    // UseTunnel
+    bool UseTunnel = 6 [(gogoproto.jsontag) = "use_tunnel,omitempty"];
 }
 
 // CommandLabelV2 is a label that has a value as a result of the

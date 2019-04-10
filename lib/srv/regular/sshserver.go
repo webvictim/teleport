@@ -140,6 +140,9 @@ type Server struct {
 	// heartbeat sends updates about this server
 	// back to auth server
 	heartbeat *srv.Heartbeat
+
+	// useTunnel
+	useTunnel bool
 }
 
 // GetClock returns server clock implementation
@@ -249,6 +252,10 @@ func (s *Server) Serve(l net.Listener) error {
 // Wait waits until server stops
 func (s *Server) Wait() {
 	s.srv.Wait(context.TODO())
+}
+
+func (s *Server) HandleConnection(conn net.Conn) {
+	s.srv.HandleConnection(conn)
 }
 
 // RotationGetter returns rotation state
@@ -375,6 +382,13 @@ func SetMACAlgorithms(macAlgorithms []string) ServerOption {
 func SetPAMConfig(pamConfig *pam.Config) ServerOption {
 	return func(s *Server) error {
 		s.pamConfig = pamConfig
+		return nil
+	}
+}
+
+func SetUseTunnel(useTunnel bool) ServerOption {
+	return func(s *Server) error {
+		s.useTunnel = useTunnel
 		return nil
 	}
 }
@@ -583,6 +597,7 @@ func (s *Server) GetInfo() services.Server {
 			CmdLabels: services.LabelsToV2(s.getCommandLabels()),
 			Addr:      s.AdvertiseAddr(),
 			Hostname:  s.hostname,
+			UseTunnel: s.useTunnel,
 		},
 	}
 }

@@ -44,6 +44,10 @@ type DialParams struct {
 	// address, tsh thinks it's connecting via DNS name and that's how it
 	// validates the host certificate.
 	Address string
+
+	// UseTunnel indicates if a reverse tunnel connection should be used
+	// to attempt to dial to this node.
+	UseTunnel bool
 }
 
 // CheckAndSetDefaults makes sure the minimal parameters are set.

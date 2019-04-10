@@ -90,6 +90,8 @@ type AgentConfig struct {
 	EventsC chan string
 	// KubeDialAddr is a dial address for kubernetes proxy
 	KubeDialAddr utils.NetAddr
+	// Server
+	Server ServerHandler
 }
 
 // CheckAndSetDefaults checks parameters and sets default values
@@ -293,6 +295,13 @@ func (a *Agent) checkHostSignature(hostport string, remote net.Addr, key ssh.Pub
 	}
 	return trace.NotFound(
 		"no matching keys found when checking server's host signature")
+}
+
+func (a *Agent) proxyNodeTransport(sconn ssh.Conn, channel ssh.Channel, reqCh <-chan *ssh.Request) {
+	defer channel.Close()
+
+	// Hand connection off to the SSH server.
+	a.AgentConfig.Server.HandleConnection(utils.NewChConn(sconn, channel))
 }
 
 func (a *Agent) connect() (conn *ssh.Client, err error) {
@@ -549,6 +558,7 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 
 	newTransportC := conn.HandleChannelOpen(chanTransport)
 	newDiscoveryC := conn.HandleChannelOpen(chanDiscovery)
+	newNodeTransportCh := conn.HandleChannelOpen(chanTransportNode)
 
 	// send first ping right away, then start a ping timer:
 	hb.SendRequest("ping", false, nil)
@@ -584,6 +594,18 @@ func (a *Agent) processRequests(conn *ssh.Client) error {
 				continue
 			}
 			go a.proxyTransport(ch, req)
+		// Node transport request.
+		case nch := <-newNodeTransportCh:
+			if nch == nil {
+				continue
+			}
+			a.Debugf("Node transport request: %v.", nch.ChannelType())
+			ch, req, err := nch.Accept()
+			if err != nil {
+				a.Warnf("Failed to accept %v request: %v", nch.ChannelType(), err)
+				continue
+			}
+			go a.proxyNodeTransport(conn.Conn, ch, req)
 		// new discovery request
 		case nch := <-newDiscoveryC:
 			if nch == nil {
@@ -642,6 +664,7 @@ const (
 	chanHeartbeat        = "teleport-heartbeat"
 	chanAccessPoint      = "teleport-access-point"
 	chanTransport        = "teleport-transport"
+	chanTransportNode    = "teleport-transport-node"
 	chanTransportDialReq = "teleport-transport-dial"
 	chanDiscovery        = "teleport-discovery"
 )

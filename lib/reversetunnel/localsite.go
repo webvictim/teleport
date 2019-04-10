@@ -150,6 +150,13 @@ func (s *localSite) Dial(params DialParams) (net.Conn, error) {
 		return nil, trace.Wrap(err)
 	}
 
+	// If reverse tunnel use is requested (server heartbeat back indicating
+	// that it connected via a reverse tunnel) then build a connection over the
+	// reverse tunnel instead of dailing.
+	if params.UseTunnel {
+		return s.chanTransportConn(params.To.String())
+	}
+
 	clusterConfig, err := s.accessPoint.GetClusterConfig()
 	if err != nil {
 		return nil, trace.Wrap(err)
@@ -334,4 +341,23 @@ func (s *localSite) handleHeartbeat(rconn *remoteConn, ch ssh.Channel, reqC <-ch
 			rconn.markInvalid(trace.ConnectionProblem(nil, "no heartbeats for %v", defaults.ReverseTunnelOfflineThreshold))
 		}
 	}
+}
+
+func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
+	s.log.Debugf("Connecting to %v through tunnel.", addr)
+
+	fmt.Printf("--> chanTransportConn: s.remoteConns: %v.\n", s.remoteConns)
+	//rconn, ok := s.remoteConns["server03"]
+	rconn, ok := s.remoteConns[addr]
+	if !ok {
+		return nil, trace.BadParameter("no reverse tunnel for %v found", addr)
+	}
+
+	channel, err := rconn.OpenChannel(chanTransportNode, nil)
+	if err != nil {
+		rconn.markInvalid(err)
+		return nil, trace.Wrap(err)
+	}
+
+	return rconn.ChannelConn(channel), nil
 }
