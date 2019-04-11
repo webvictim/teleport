@@ -219,6 +219,7 @@ func (s *Server) Close() error {
 // Shutdown performs graceful shutdown
 func (s *Server) Shutdown(ctx context.Context) error {
 	// wait until connections drain off
+	fmt.Printf("--> Shutdown: here.\n")
 	err := s.srv.Shutdown(ctx)
 	s.cancel()
 	s.reg.Close()
@@ -237,6 +238,10 @@ func (s *Server) Start() error {
 		s.updateLabels()
 	}
 	go s.heartbeat.Run()
+
+	if s.useTunnel {
+		return nil
+	}
 	return s.srv.Start()
 }
 

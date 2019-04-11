@@ -169,9 +169,9 @@ type Connector struct {
 	// Client is authenticated client with credentials from ClientIdenity.
 	Client *auth.Client
 
-	// Direct indicates if the client is connected directly to the Auth Server
-	// (true) or through the proxy (false).
-	Direct bool
+	// UseTunnel indicates if the client is connected directly to the Auth Server
+	// (false) or through the proxy (true).
+	UseTunnel bool
 }
 
 // Close closes resources associated with connector
@@ -1372,7 +1372,7 @@ func (process *TeleportProcess) initSSH() error {
 			regular.SetMACAlgorithms(cfg.MACAlgorithms),
 			regular.SetPAMConfig(cfg.SSH.PAM),
 			regular.SetRotationGetter(process.getRotation),
-			regular.SetUseTunnel(true),
+			regular.SetUseTunnel(conn.UseTunnel),
 		)
 		if err != nil {
 			return trace.Wrap(err)
@@ -1386,7 +1386,7 @@ func (process *TeleportProcess) initSSH() error {
 			}
 		}
 
-		if conn.Direct {
+		if !conn.UseTunnel {
 			listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
 			if err != nil {
 				return trace.Wrap(err)
@@ -1396,16 +1396,20 @@ func (process *TeleportProcess) initSSH() error {
 
 			log.Infof("Service is starting on %v %v.", cfg.SSH.Addr.Addr, process.Config.CachePolicy)
 			utils.Consolef(cfg.Console, teleport.ComponentNode, "Service is starting on %v.", cfg.SSH.Addr.Addr)
+
+			// Start the SSH server. This kicks off updating labels, starting the
+			// heartbeat, and accepting connections.
 			go s.Serve(listener)
 
 			// Broadcast that the node has started.
 			process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
-
-			// Block and wait while the node is running.
-			s.Wait()
 		} else {
+			// Start the SSH server. This kicks off updating labels and starting the
+			// heartbeat.
+			s.Start()
+
 			// Start upserting reverse tunnel in a loop while the process is running.
-			go process.upsertTunnelLoop(conn)
+			go process.upsertTunnelForever(conn)
 
 			tlsConfig, err := conn.ClientIdentity.TLSConfig(cfg.CipherSuites)
 			if err != nil {
@@ -1435,20 +1439,20 @@ func (process *TeleportProcess) initSSH() error {
 
 			// Broadcast that the node has started.
 			process.BroadcastEvent(Event{Name: NodeSSHReady, Payload: nil})
+		}
 
-			// Block and wait while the node is running.
+		// Block and wait while the node is running.
+		s.Wait()
+		if conn.UseTunnel {
 			agentPool.Wait()
 		}
 
 		log.Infof("Exited.")
 		return nil
 	})
-	// execute this when process is asked to exit:
-	process.onExit("ssh.shutdown", func(payload interface{}) {
-		if !conn.Direct {
-			agentPool.Stop()
-		}
 
+	// Execute this when process is asked to exit.
+	process.onExit("ssh.shutdown", func(payload interface{}) {
 		if payload == nil {
 			log.Infof("Shutting down immediately.")
 			if s != nil {
@@ -1460,35 +1464,45 @@ func (process *TeleportProcess) initSSH() error {
 				warnOnErr(s.Shutdown(payloadContext(payload)))
 			}
 		}
+		if conn.UseTunnel {
+			agentPool.Stop()
+		}
+
 		log.Infof("Exited.")
 	})
 
 	return nil
 }
 
-func (process *TeleportProcess) upsertTunnelLoop(conn *Connector) {
+func (process *TeleportProcess) upsertTunnelForever(conn *Connector) {
+	process.upsertTunnel(conn)
+
 	for {
 		select {
 		case <-process.ExitContext().Done():
 			return
 		case <-time.Tick(90 * time.Second):
-			proxyAddr, err := discoverProxy(process.Config.AuthServers)
-			if err != nil {
-				log.Debugf("Failed to discover proxy address: %v.", err)
-			}
-
-			reverseTunnel := services.NewReverseTunnel(
-				conn.ServerIdentity.ID.HostUUID,
-				[]string{proxyAddr},
-			)
-			reverseTunnel.SetType(services.NodeTunnel)
-			reverseTunnel.SetExpiry(process.Clock.Now().Add(100 * time.Second))
-
-			err = conn.Client.UpsertReverseTunnel(reverseTunnel)
-			if err != nil {
-				log.Debugf("Failed to upsert reverse tunnel: %v.", err)
-			}
+			process.upsertTunnel(conn)
 		}
+	}
+}
+
+func (process *TeleportProcess) upsertTunnel(conn *Connector) {
+	proxyAddr, err := discoverProxy(process.Config.AuthServers)
+	if err != nil {
+		log.Debugf("Failed to discover proxy address: %v.", err)
+	}
+
+	reverseTunnel := services.NewReverseTunnel(
+		conn.ServerIdentity.ID.HostUUID,
+		[]string{proxyAddr},
+	)
+	reverseTunnel.SetType(services.NodeTunnel)
+	reverseTunnel.SetExpiry(process.Clock.Now().Add(100 * time.Second))
+
+	err = conn.Client.UpsertReverseTunnel(reverseTunnel)
+	if err != nil {
+		log.Debugf("Failed to upsert reverse tunnel: %v.", err)
 	}
 }
 

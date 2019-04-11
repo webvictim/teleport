@@ -309,6 +309,13 @@ func (s *Server) Close() error {
 	s.Lock()
 	defer s.Unlock()
 
+	// If no listener is set, the server is in tunnel mode which means
+	// closeFunc has to be manually called.
+	if s.listener == nil {
+		s.closeFunc()
+		return nil
+	}
+
 	// listener already closed, nothing to do
 	if s.listenerClosed {
 		return nil

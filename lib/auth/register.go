@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -181,8 +180,6 @@ func hostCredentials(token string, params RegisterParams) (*PackedKeys, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-
-	fmt.Printf("--> hostCredentials: %v.\n", len(packedKeys.SSHCACerts))
 
 	return packedKeys, nil
 }
