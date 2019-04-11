@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
-	"net/http"
+	//"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -50,8 +50,8 @@ type remoteSite struct {
 	connections []*remoteConn
 	lastUsed    int
 	srv         *server
-	transport   *http.Transport
-	connInfo    services.TunnelConnection
+	//transport   *http.Transport
+	connInfo services.TunnelConnection
 	// lastConnInfo is the last conn
 	lastConnInfo services.TunnelConnection
 	ctx          context.Context
@@ -107,14 +107,16 @@ func (s *remoteSite) getRemoteClient() (auth.ClientI, bool, error) {
 		}
 		return clt, false, nil
 	}
-	// create legacy client that will continue to perform certificate
-	// exchange attempts
-	s.Debugf("Created legacy SSH client to remote cluster.")
-	clt, err := auth.NewClient("http://stub:0", s.dialAccessPoint)
-	if err != nil {
-		return nil, false, trace.Wrap(err)
-	}
-	return clt, true, nil
+
+	return nil, false, trace.BadParameter("no TLS keys found")
+	//// create legacy client that will continue to perform certificate
+	//// exchange attempts
+	//s.Debugf("Created legacy SSH client to remote cluster.")
+	//clt, err := auth.NewClient("http://stub:0", s.dialAccessPoint)
+	//if err != nil {
+	//	return nil, false, trace.Wrap(err)
+	//}
+	//return clt, true, nil
 }
 
 func (s *remoteSite) authServerContextDialer(ctx context.Context, network, address string) (net.Conn, error) {
@@ -447,37 +449,37 @@ func (s *remoteSite) periodicUpdateCertAuthorities() {
 	}
 }
 
-// dialAccessPoint establishes a connection from the proxy (reverse tunnel server)
-// back into the client using previously established tunnel.
-func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
-	try := func() (net.Conn, error) {
-		rconn, err := s.nextConn()
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		channel, err := rconn.OpenChannel(chanAccessPoint, nil)
-		if err != nil {
-			rconn.markInvalid(err)
-			s.Errorf("disconnecting cluster on %v, err: %v",
-				rconn.conn.RemoteAddr(),
-				err)
-			return nil, trace.Wrap(err)
-		}
-		s.Debugf("success dialing to cluster")
-		return rconn.ChannelConn(channel), nil
-	}
-
-	for {
-		conn, err := try()
-		if err != nil {
-			if trace.IsNotFound(err) {
-				return nil, trace.Wrap(err)
-			}
-			continue
-		}
-		return conn, nil
-	}
-}
+//// dialAccessPoint establishes a connection from the proxy (reverse tunnel server)
+//// back into the client using previously established tunnel.
+//func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
+//	try := func() (net.Conn, error) {
+//		rconn, err := s.nextConn()
+//		if err != nil {
+//			return nil, trace.Wrap(err)
+//		}
+//		channel, err := rconn.OpenChannel(chanAccessPoint, nil)
+//		if err != nil {
+//			rconn.markInvalid(err)
+//			s.Errorf("disconnecting cluster on %v, err: %v",
+//				rconn.conn.RemoteAddr(),
+//				err)
+//			return nil, trace.Wrap(err)
+//		}
+//		s.Debugf("success dialing to cluster")
+//		return rconn.ChannelConn(channel), nil
+//	}
+//
+//	for {
+//		conn, err := try()
+//		if err != nil {
+//			if trace.IsNotFound(err) {
+//				return nil, trace.Wrap(err)
+//			}
+//			continue
+//		}
+//		return conn, nil
+//	}
+//}
 
 func (s *remoteSite) DialAuthServer() (conn net.Conn, err error) {
 	return s.connThroughTunnel(chanTransportDialReq, RemoteAuthServer)

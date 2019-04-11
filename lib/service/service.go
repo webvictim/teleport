@@ -1387,6 +1387,7 @@ func (process *TeleportProcess) initSSH() error {
 		}
 
 		if !conn.UseTunnel {
+			fmt.Printf("")
 			listener, err := process.importOrCreateListener(teleport.ComponentNode, cfg.SSH.Addr.Addr)
 			if err != nil {
 				return trace.Wrap(err)

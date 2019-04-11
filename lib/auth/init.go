@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"github.com/gravitational/teleport/lib/events"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/sshca"
+	"github.com/gravitational/teleport/lib/sshutils"
 	"github.com/gravitational/teleport/lib/tlsca"
 	"github.com/gravitational/teleport/lib/utils"
 
@@ -628,6 +630,41 @@ func (i *Identity) TLSConfig(cipherSuites []uint16) (*tls.Config, error) {
 	tlsConfig.ClientCAs = certPool
 	tlsConfig.ServerName = EncodeClusterName(i.ClusterName)
 	return tlsConfig, nil
+}
+
+// SSHClientConfig returns a ssh.ClientConfig used by nodes to connect to
+// the reverse tunnel server to establish a reverse tunnel.
+func (i *Identity) SSHClientConfig() *ssh.ClientConfig {
+	return &ssh.ClientConfig{
+		User: i.ID.HostUUID,
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(i.KeySigner),
+		},
+		HostKeyCallback: i.hostKeyCallback,
+		Timeout:         defaults.DefaultDialTimeout,
+	}
+}
+
+// hostKeyCallback checks if the host certificate was signed by any of the
+// known CAs.
+func (i *Identity) hostKeyCallback(hostname string, remote net.Addr, key ssh.PublicKey) error {
+	cert, ok := key.(*ssh.Certificate)
+	if !ok {
+		return trace.BadParameter("only host certificates supported")
+	}
+
+	// Loop over all CAs and see if any of them signed the certificate.
+	for _, k := range i.SSHCACertBytes {
+		pubkey, _, _, _, err := ssh.ParseAuthorizedKey(k)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		if sshutils.KeysEqual(cert.SignatureKey, pubkey) {
+			return nil
+		}
+	}
+
+	return trace.BadParameter("no matching keys found")
 }
 
 // IdentityID is a combination of role, host UUID, and node name.

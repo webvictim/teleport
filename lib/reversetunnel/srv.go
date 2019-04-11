@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
+	//"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -1005,10 +1005,10 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 		clock:  srv.Clock,
 	}
 
-	// transport uses connection do dial out to the remote address
-	remoteSite.transport = &http.Transport{
-		Dial: remoteSite.dialAccessPoint,
-	}
+	//// transport uses connection do dial out to the remote address
+	//remoteSite.transport = &http.Transport{
+	//	Dial: remoteSite.dialAccessPoint,
+	//}
 
 	// configure access to the full Auth Server API and the cached subset for
 	// the local cluster within which reversetunnel.Server is running.

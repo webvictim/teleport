@@ -661,8 +661,8 @@ func (a *Agent) handleDiscovery(ch ssh.Channel, reqC <-chan *ssh.Request) {
 }
 
 const (
-	chanHeartbeat        = "teleport-heartbeat"
-	chanAccessPoint      = "teleport-access-point"
+	chanHeartbeat = "teleport-heartbeat"
+	//chanAccessPoint      = "teleport-access-point"
 	chanTransport        = "teleport-transport"
 	chanTransportNode    = "teleport-transport-node"
 	chanTransportDialReq = "teleport-transport-dial"
