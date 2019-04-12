@@ -343,14 +343,32 @@ func (s *localSite) handleHeartbeat(rconn *remoteConn, ch ssh.Channel, reqC <-ch
 	}
 }
 
-func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
-	s.log.Debugf("Connecting to %v through tunnel.", addr)
+func (s *localSite) getConn(addr string) (*remoteConn, error) {
+	s.Lock()
+	defer s.Unlock()
 
-	fmt.Printf("--> chanTransportConn: s.remoteConns: %v.\n", s.remoteConns)
-	//rconn, ok := s.remoteConns["server03"]
+	// Loop over all connections and remove and invalid connections from the
+	// connection map.
+	for key, _ := range s.remoteConns {
+		if s.remoteConns[key].isInvalid() {
+			delete(s.remoteConns, key)
+		}
+	}
+
 	rconn, ok := s.remoteConns[addr]
 	if !ok {
 		return nil, trace.BadParameter("no reverse tunnel for %v found", addr)
+	}
+
+	return rconn, nil
+}
+
+func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
+	s.log.Debugf("Connecting to %v through tunnel.", addr)
+
+	rconn, err := s.getConn(addr)
+	if err != nil {
+		return nil, trace.Wrap(err)
 	}
 
 	channel, err := rconn.OpenChannel(chanTransportNode, nil)

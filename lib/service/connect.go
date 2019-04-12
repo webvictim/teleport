@@ -18,7 +18,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"net"
 	"path/filepath"
