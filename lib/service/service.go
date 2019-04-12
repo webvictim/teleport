@@ -1489,7 +1489,7 @@ func (process *TeleportProcess) upsertTunnelForever(conn *Connector) {
 }
 
 func (process *TeleportProcess) upsertTunnel(conn *Connector) {
-	proxyAddr, err := discoverProxy(process.Config.AuthServers)
+	proxyAddr, err := process.discoverProxy(process.Config.AuthServers)
 	if err != nil {
 		log.Debugf("Failed to discover proxy address: %v.", err)
 	}

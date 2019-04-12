@@ -27,6 +27,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/gravitational/teleport"
+	"github.com/gravitational/teleport/lib"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/client"
@@ -358,6 +359,13 @@ func (process *TeleportProcess) firstTimeConnect(role teleport.Role) (*Connector
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
+
+		// TODO: Make this take a slice.
+		credsClient, err := client.NewCredentialsClient(process.Config.AuthServers[0].String(), lib.IsInsecureDevMode(), nil)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+
 		identity, err = auth.Register(auth.RegisterParams{
 			DataDir:              process.Config.DataDir,
 			Token:                process.Config.Token,
@@ -371,6 +379,7 @@ func (process *TeleportProcess) firstTimeConnect(role teleport.Role) (*Connector
 			CipherSuites:         process.Config.CipherSuites,
 			CAPin:                process.Config.CAPin,
 			CAPath:               filepath.Join(defaults.DataDir, defaults.CACertFile),
+			CredsClient:          credsClient,
 		})
 		if err != nil {
 			return nil, trace.Wrap(err)
@@ -787,11 +796,21 @@ func (process *TeleportProcess) newClient(authServers []utils.NetAddr, identity 
 	return directClient, false, nil
 }
 
-func discoverProxy(addrs []utils.NetAddr) (string, error) {
+func (process *TeleportProcess) discoverProxy(addrs []utils.NetAddr) (string, error) {
+
 	var errs []error
 	for _, addr := range addrs {
-		// TODO: Pass in insecure flag instead of hardcoding it here.
-		resp, err := client.Ping(context.Background(), addr.String(), true, nil, "")
+		// In insecure mode, any certificate is accepted. In secure mode the hosts
+		// CAs are used to validate the certificate on the proxy.
+		clt, err := client.NewCredentialsClient(
+			addr.String(),
+			lib.IsInsecureDevMode(),
+			nil)
+		if err != nil {
+			return "", trace.Wrap(err)
+		}
+
+		resp, err := clt.Ping(context.Background(), "")
 		if err == nil {
 			host, err := utils.Host(resp.Proxy.SSH.PublicAddr)
 			if err != nil {
@@ -812,7 +831,7 @@ func discoverProxy(addrs []utils.NetAddr) (string, error) {
 
 func (process *TeleportProcess) newClientThroughTunnel(servers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
 	// Discover address of SSH reverse tunnel server.
-	proxyAddr, err := discoverProxy(servers)
+	proxyAddr, err := process.discoverProxy(servers)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}

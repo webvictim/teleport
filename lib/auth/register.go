@@ -17,12 +17,13 @@ limitations under the License.
 package auth
 
 import (
-	"bytes"
-	"crypto/tls"
+	//"bytes"
+	//"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
+	//"encoding/json"
+	"context"
 	"io/ioutil"
-	"net/http"
+	//"net/http"
 	"strings"
 
 	"github.com/gravitational/teleport"
@@ -93,6 +94,12 @@ type RegisterParams struct {
 	CAPin string
 	// CAPath is the path to the CA file.
 	CAPath string
+	// CredsClient
+	CredsClient HostCredentialer
+}
+
+type HostCredentialer interface {
+	HostCredentials(context.Context, RegisterUsingTokenRequest) (*PackedKeys, error)
 }
 
 // Register is used to generate host keys when a node or proxy are running on
@@ -107,6 +114,7 @@ func Register(params RegisterParams) (*Identity, error) {
 		return nil, trace.Wrap(err)
 	}
 
+	// TODO: Figure out how to register works.
 	var registerWithAuth bool
 	if registerWithAuth {
 		return registerThroughAuth(token, params)
@@ -116,72 +124,24 @@ func Register(params RegisterParams) (*Identity, error) {
 
 func registerThroughProxy(token string, params RegisterParams) (*Identity, error) {
 	log.Debugf("Registering through proxy.")
-	//	keys, err := client.HostCredentials(context.Background(), params.Servers[0].String(), true, nil,
-	//		auth.RegisterUsingTokenRequest{
-	//			Token:                token,
-	//			HostID:               params.ID.HostUUID,
-	//			NodeName:             params.ID.NodeName,
-	//			Role:                 params.ID.Role,
-	//			AdditionalPrincipals: params.AdditionalPrincipals,
-	//			DNSNames:             params.DNSNames,
-	//			PublicTLSKey:         params.PublicTLSKey,
-	//			PublicSSHKey:         params.PublicSSHKey,
-	//		})
-	keys, err := hostCredentials(token, params)
+
+	keys, err := params.CredsClient.HostCredentials(context.Background(),
+		RegisterUsingTokenRequest{
+			Token:                token,
+			HostID:               params.ID.HostUUID,
+			NodeName:             params.ID.NodeName,
+			Role:                 params.ID.Role,
+			AdditionalPrincipals: params.AdditionalPrincipals,
+			DNSNames:             params.DNSNames,
+			PublicTLSKey:         params.PublicTLSKey,
+			PublicSSHKey:         params.PublicSSHKey,
+		})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 
 	return ReadIdentityFromKeyPair(
 		params.PrivateKey, keys.Cert, keys.TLSCert, keys.TLSCACerts, keys.SSHCACerts)
-}
-
-func hostCredentials(token string, params RegisterParams) (*PackedKeys, error) {
-	buf, err := json.Marshal(RegisterUsingTokenRequest{
-		Token:                token,
-		HostID:               params.ID.HostUUID,
-		NodeName:             params.ID.NodeName,
-		Role:                 params.ID.Role,
-		AdditionalPrincipals: params.AdditionalPrincipals,
-		DNSNames:             params.DNSNames,
-		PublicTLSKey:         params.PublicTLSKey,
-		PublicSSHKey:         params.PublicSSHKey,
-	})
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	// TODO: Hardcoded, fix this.
-	req, err := http.NewRequest("POST", "https://localhost:3080/v1/webapi/host/credentials", bytes.NewBuffer(buf))
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	// TODO: Insecure, fix this.
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	var packedKeys *PackedKeys
-	err = json.Unmarshal(body, &packedKeys)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	return packedKeys, nil
 }
 
 func registerThroughAuth(token string, params RegisterParams) (*Identity, error) {

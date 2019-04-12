@@ -31,19 +31,6 @@ import (
 	"github.com/gravitational/trace"
 )
 
-func NewInsecureWebClient() *http.Client {
-	// Because Teleport clients can't be configured (yet), they take the default
-	// list of cipher suites from Go.
-	tlsConfig := utils.TLSConfig(nil)
-	tlsConfig.InsecureSkipVerify = true
-
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
-	}
-}
-
 func newClientWithPool(pool *x509.CertPool) *http.Client {
 	// Because Teleport clients can't be configured (yet), they take the default
 	// list of cipher suites from Go.
@@ -64,6 +51,19 @@ func NewWebClient(url string, opts ...roundtrip.ClientParam) (*WebClient, error)
 		return nil, trace.Wrap(err)
 	}
 	return &WebClient{clt}, nil
+}
+
+func NewInsecureWebClient() *http.Client {
+	// Because Teleport clients can't be configured (yet), they take the default
+	// list of cipher suites from Go.
+	tlsConfig := utils.TLSConfig(nil)
+	tlsConfig.InsecureSkipVerify = true
+
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
 }
 
 // WebClient is a package local lightweight client used
