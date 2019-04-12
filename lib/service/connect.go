@@ -18,8 +18,11 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
 	"net"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -829,11 +832,26 @@ func (process *TeleportProcess) newClientThroughTunnel(servers []utils.NetAddr, 
 
 	// Connect to the Auth Server through the reverse tunnel server.
 	authDialer := func(in context.Context, network, addr string) (net.Conn, error) {
-		authCh, _, err := conn.OpenChannel("auth", nil)
+		channel, _, err := conn.OpenChannel("auth", nil)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return utils.NewChConn(conn.Conn, authCh), nil
+
+		ok, err := channel.SendRequest("teleport-transport", true, []byte("@local-auth-server"))
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		if !ok {
+			defer channel.Close()
+			// pull the error message from the tunnel client (remote cluster)
+			// passed to us via stderr:
+			errMessage, _ := ioutil.ReadAll(channel.Stderr())
+			if errMessage == nil {
+				errMessage = []byte("failed connecting to " + addr)
+			}
+			return nil, trace.Errorf(strings.TrimSpace(string(errMessage)))
+		}
+		return utils.NewChConn(conn.Conn, channel), nil
 	}
 
 	clt, err := auth.NewTLSClientWithDialer(authDialer, tlsConfig)

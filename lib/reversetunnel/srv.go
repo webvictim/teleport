@@ -491,8 +491,6 @@ func (s *server) Shutdown(ctx context.Context) error {
 }
 
 func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
-	//var err error
-
 	// Apply read/write timeouts to the server connection.
 	conn = utils.ObeyIdleTimeout(conn,
 		defaults.ReverseTunnelAgentHeartbeatPeriod*10,
@@ -503,40 +501,14 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	case chanHeartbeat:
 		s.handleHeartbeat(conn, sconn, nch)
 	case "auth":
-		servers, err := s.LocalAuthClient.GetAuthServers()
-		if err != nil {
-			s.Errorf("Failed to get list of Auth Servers: %v.", err)
-			nch.Reject(ssh.ConnectionFailed, fmt.Sprintf("request for %v channel failed", "auth"))
-			return
-		}
-		var conn net.Conn
-		for _, s := range servers {
-			conn, err = net.Dial("tcp", s.GetAddr())
-			if err != nil {
-				log.Errorf("Dial to Auth Server %v failed: %v.", s.GetAddr(), err)
-				continue
-			}
-		}
-		if conn == nil {
-			log.Errorf("!!!!!!!!!!!! Dial to Auth Server failed: %v.", err)
-			nch.Reject(ssh.ConnectionFailed, fmt.Sprintf("request for %v channel failed", "auth"))
-			return
-		}
-		channel, _, err := nch.Accept()
-		if err != nil {
-			log.Errorf("Failed to accept on channel: %v.", err)
-			sconn.Close()
-			return
-		}
-		fmt.Printf("--> PROXYING OVER HERE!\n")
-		go io.Copy(conn, channel)
-		go io.Copy(channel, conn)
+		s.handleTransport(sconn, nch)
 	default:
 		msg := fmt.Sprintf("reversetunnel received unknown channel request %v from %v",
 			nch.ChannelType(), sconn)
 
-		// if someone is trying to open a new SSH session by talking to a reverse tunnel,
-		// they're most likely using the wrong port number. Lets give them the explicit hint:
+		// If someone is trying to open a new SSH session by talking to a reverse
+		// tunnel, they're most likely using the wrong port number. Give them an
+		// explicit hint.
 		if channelType == "session" {
 			msg = "Cannot open new SSH session on reverse tunnel. Are you connecting to the right port?"
 		}
@@ -544,6 +516,76 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 		nch.Reject(ssh.ConnectionFailed, msg)
 		return
 	}
+}
+
+func (s *server) handleTransport(sconn *ssh.ServerConn, nch ssh.NewChannel) {
+	channel, requestCh, err := nch.Accept()
+	if err != nil {
+		log.Errorf("Failed to accept on channel: %v.", err)
+		sconn.Close()
+		return
+	}
+
+	fmt.Fprint(channel.Stderr(), " ")
+
+	// Wait for a request to come in from the other side telling the server
+	// where to dial to.
+	var req *ssh.Request
+	select {
+	case <-s.ctx.Done():
+		return
+	case req = <-requestCh:
+		if req == nil {
+			return
+		}
+	//case <-time.After(defaults.DefaultDialTimeout):
+	case <-time.After(2 * time.Second):
+		s.Warnf("Transport request failed: timed out waiting for request.")
+		return
+	}
+
+	var servers []string
+	server := string(req.Payload)
+
+	// Parse the request, if the request was for @local-auth-server, then
+	// resolve the Auth Server and try and connect to it. Otherwise connect to
+	// whatever host the client requests.
+	switch server {
+	case LocalAuthServer:
+		authServers, err := s.LocalAuthClient.GetAuthServers()
+		if err != nil {
+			s.Errorf("Failed to get list of Auth Servers: %v.", err)
+			nch.Reject(ssh.ConnectionFailed, "request for channel transport failed")
+			return
+		}
+		if len(authServers) == 0 {
+			s.Errorf("Transport request failed: no Auth Servers found.")
+			nch.Reject(ssh.ConnectionFailed, "request for channel transport failed")
+			return
+		}
+		for _, as := range authServers {
+			servers = append(servers, as.GetAddr())
+		}
+	default:
+		servers = append(servers, server)
+	}
+
+	var conn net.Conn
+	for _, s := range servers {
+		conn, err = net.Dial("tcp", s)
+		if err != nil {
+			log.Errorf("Dial to Auth Server %v failed: %v.", s, err)
+			continue
+		}
+	}
+	if conn == nil {
+		nch.Reject(ssh.ConnectionFailed, "request for channel transport failed")
+		return
+	}
+	req.Reply(true, []byte("connected"))
+
+	go io.Copy(conn, channel)
+	go io.Copy(channel, conn)
 }
 
 func (s *server) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
