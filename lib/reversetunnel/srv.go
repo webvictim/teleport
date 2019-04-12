@@ -20,9 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
-	//"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -500,7 +498,7 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 	switch channelType {
 	case chanHeartbeat:
 		s.handleHeartbeat(conn, sconn, nch)
-	case "auth":
+	case "teleport-transport":
 		s.handleTransport(sconn, nch)
 	default:
 		msg := fmt.Sprintf("reversetunnel received unknown channel request %v from %v",
@@ -519,73 +517,21 @@ func (s *server) HandleNewChan(conn net.Conn, sconn *ssh.ServerConn, nch ssh.New
 }
 
 func (s *server) handleTransport(sconn *ssh.ServerConn, nch ssh.NewChannel) {
+	s.Debugf("Transport request: %v.", nch.ChannelType())
 	channel, requestCh, err := nch.Accept()
 	if err != nil {
-		log.Errorf("Failed to accept on channel: %v.", err)
 		sconn.Close()
+		s.Warnf("Failed to accept request: %v.", err)
 		return
 	}
 
-	fmt.Fprint(channel.Stderr(), " ")
-
-	// Wait for a request to come in from the other side telling the server
-	// where to dial to.
-	var req *ssh.Request
-	select {
-	case <-s.ctx.Done():
-		return
-	case req = <-requestCh:
-		if req == nil {
-			return
-		}
-	//case <-time.After(defaults.DefaultDialTimeout):
-	case <-time.After(2 * time.Second):
-		s.Warnf("Transport request failed: timed out waiting for request.")
-		return
-	}
-
-	var servers []string
-	server := string(req.Payload)
-
-	// Parse the request, if the request was for @local-auth-server, then
-	// resolve the Auth Server and try and connect to it. Otherwise connect to
-	// whatever host the client requests.
-	switch server {
-	case LocalAuthServer:
-		authServers, err := s.LocalAuthClient.GetAuthServers()
-		if err != nil {
-			s.Errorf("Failed to get list of Auth Servers: %v.", err)
-			nch.Reject(ssh.ConnectionFailed, "request for channel transport failed")
-			return
-		}
-		if len(authServers) == 0 {
-			s.Errorf("Transport request failed: no Auth Servers found.")
-			nch.Reject(ssh.ConnectionFailed, "request for channel transport failed")
-			return
-		}
-		for _, as := range authServers {
-			servers = append(servers, as.GetAddr())
-		}
-	default:
-		servers = append(servers, server)
-	}
-
-	var conn net.Conn
-	for _, s := range servers {
-		conn, err = net.Dial("tcp", s)
-		if err != nil {
-			log.Errorf("Dial to Auth Server %v failed: %v.", s, err)
-			continue
-		}
-	}
-	if conn == nil {
-		nch.Reject(ssh.ConnectionFailed, "request for channel transport failed")
-		return
-	}
-	req.Reply(true, []byte("connected"))
-
-	go io.Copy(conn, channel)
-	go io.Copy(channel, conn)
+	go proxyTransport(&transportParams{
+		log:          s.Entry,
+		closeContext: s.ctx,
+		authClient:   s.LocalAuthClient,
+		channel:      channel,
+		requestCh:    requestCh,
+	})
 }
 
 func (s *server) handleHeartbeat(conn net.Conn, sconn *ssh.ServerConn, nch ssh.NewChannel) {
@@ -753,24 +699,6 @@ func (s *server) keyAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 				"role":       cert.Extensions["x-teleport-role"],
 			},
 		}, nil
-	//case ssh.UserCert:
-	//	certChecker := utils.CertChecker{
-	//		CertChecker: ssh.CertChecker{
-	//			IsUserAuthority: s.isUserAuthority,
-	//		},
-	//	}
-	//	_, err := certChecker.Authenticate(conn, key)
-	//	if err != nil {
-	//		logger.Warningf("Failed to authenticate user, err: %v.", err)
-	//		return nil, err
-	//	}
-
-	//	return &ssh.Permissions{
-	//		Extensions: map[string]string{
-	//			extHost:     conn.User(),
-	//			extCertType: extCertTypeUser,
-	//		},
-	//	}, nil
 	default:
 		return nil, trace.BadParameter("unsupported cert type: %v", cert.CertType)
 	}
@@ -954,69 +882,6 @@ func (s *server) RemoveSite(domainName string) error {
 	return trace.NotFound("cluster %q is not found", domainName)
 }
 
-//type remoteConn struct {
-//	sshConn       ssh.Conn
-//	conn          net.Conn
-//	invalid       int32
-//	log           *log.Entry
-//	discoveryC    ssh.Channel
-//	discoveryErr  error
-//	closed        int32
-//	lastHeartbeat int64
-//
-//	nodeID string
-//}
-//
-//func (rc *remoteConn) openDiscoveryChannel() (ssh.Channel, error) {
-//	if rc.discoveryC != nil {
-//		return rc.discoveryC, nil
-//	}
-//	if rc.discoveryErr != nil {
-//		return nil, trace.Wrap(rc.discoveryErr)
-//	}
-//	discoveryC, _, err := rc.sshConn.OpenChannel(chanDiscovery, nil)
-//	if err != nil {
-//		rc.discoveryErr = err
-//		return nil, trace.Wrap(err)
-//	}
-//	rc.discoveryC = discoveryC
-//	return rc.discoveryC, nil
-//}
-//
-//func (rc *remoteConn) String() string {
-//	return fmt.Sprintf("remoteConn(remoteAddr=%v)", rc.conn.RemoteAddr())
-//}
-//
-//func (rc *remoteConn) Close() error {
-//	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
-//		// already closed
-//		return nil
-//	}
-//	if rc.discoveryC != nil {
-//		rc.discoveryC.Close()
-//		rc.discoveryC = nil
-//	}
-//	return rc.sshConn.Close()
-//}
-//
-//func (rc *remoteConn) markInvalid(err error) {
-//	atomic.StoreInt32(&rc.invalid, 1)
-//}
-//
-//func (rc *remoteConn) isInvalid() bool {
-//	return atomic.LoadInt32(&rc.invalid) == 1
-//}
-//
-//func (rc *remoteConn) setLastHeartbeat(tm time.Time) {
-//	atomic.StoreInt64(&rc.lastHeartbeat, tm.UnixNano())
-//}
-//
-//// isReady returns true when connection is ready to be tried,
-//// it returns true when connection has received the first heartbeat
-//func (rc *remoteConn) isReady() bool {
-//	return atomic.LoadInt64(&rc.lastHeartbeat) != 0
-//}
-
 // newRemoteSite helper creates and initializes 'remoteSite' instance
 func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	connInfo, err := services.NewTunnelConnection(
@@ -1047,11 +912,6 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 		clock:  srv.Clock,
 	}
 
-	//// transport uses connection do dial out to the remote address
-	//remoteSite.transport = &http.Transport{
-	//	Dial: remoteSite.dialAccessPoint,
-	//}
-
 	// configure access to the full Auth Server API and the cached subset for
 	// the local cluster within which reversetunnel.Server is running.
 	remoteSite.localClient = srv.localAuthClient
@@ -1081,7 +941,6 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	}
 	remoteSite.certificateCache = certificateCache
 
-	//go remoteSite.periodicSendDiscoveryRequests()
 	go remoteSite.periodicUpdateCertAuthorities()
 
 	return remoteSite, nil

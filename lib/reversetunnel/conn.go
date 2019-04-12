@@ -19,7 +19,10 @@ package reversetunnel
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -313,4 +316,172 @@ func (c *remoteConn) sendDiscoveryRequests(req discoveryRequest) error {
 
 func (c *remoteConn) isOnline(conn services.TunnelConnection) bool {
 	return services.TunnelConnectionStatus(c.clock, conn) == teleport.RemoteClusterStatusOnline
+}
+
+type transportParams struct {
+	log          *logrus.Entry
+	closeContext context.Context
+	authClient   auth.ClientI
+	channel      ssh.Channel
+	requestCh    <-chan *ssh.Request
+
+	kubeDialAddr utils.NetAddr
+
+	sconn  ssh.Conn
+	server ServerHandler
+}
+
+func (t *transportParams) Check() error {
+	return nil
+}
+
+// connectProxyTransport opens a channel over the remote tunnel and connects
+// to the requested host.
+func connectProxyTransport(rconn *remoteConn, addr string) (net.Conn, bool, error) {
+	channel, err := rconn.OpenChannel(chanTransport, nil)
+	if err != nil {
+		rconn.markInvalid(err)
+		return nil, false, trace.Wrap(err)
+	}
+
+	// Send a special SSH out-of-band request called "teleport-transport"
+	// the agent on the other side will create a new TCP/IP connection to
+	// 'addr' on its network and will start proxying that connection over
+	// this SSH channel.
+	ok, err := channel.SendRequest(chanTransportDialReq, true, []byte(addr))
+	if err != nil {
+		return nil, false, trace.Wrap(err)
+	}
+	if !ok {
+		defer channel.Close()
+
+		// Pull the error message from the tunnel client (remote cluster)
+		// passed to us via stderr.
+		errMessage, _ := ioutil.ReadAll(channel.Stderr())
+		if errMessage == nil {
+			errMessage = []byte("failed connecting to " + addr)
+		}
+		return nil, true, trace.Errorf(strings.TrimSpace(string(errMessage)))
+	}
+
+	return rconn.ChannelConn(channel), false, nil
+}
+
+// proxyTransport runs either in the agent or reverse tunnel itself. It's
+// used to establish connections from remote clusters into the main cluster
+// or for remote nodes that have no direct network access to the cluster.
+func proxyTransport(p *transportParams) {
+	defer p.channel.Close()
+
+	// Make sure the transport request is even valid.
+	err := p.Check()
+	if err != nil {
+		p.log.Warnf("Transport request failed: %v.", err)
+		return
+	}
+
+	// Always push space into stderr to make sure the caller can always
+	// safely call read (stderr) without blocking. This stderr is only used
+	// to request proxying of TCP/IP via reverse tunnel.
+	fmt.Fprint(p.channel.Stderr(), " ")
+
+	// Wait for a request to come in from the other side telling the server
+	// where to dial to.
+	var req *ssh.Request
+	select {
+	case <-p.closeContext.Done():
+		return
+	case req = <-p.requestCh:
+		if req == nil {
+			return
+		}
+	case <-time.After(defaults.DefaultDialTimeout):
+		p.log.Warnf("Transport request failed: timed out waiting for request.")
+		return
+	}
+
+	server := string(req.Payload)
+	var servers []string
+
+	// If the request is for the remote auth server or Kubernetes proxy, resolve
+	// and connect to them. Otherwise connect to the passed in server.
+	switch server {
+	case RemoteAuthServer:
+		authServers, err := p.authClient.GetAuthServers()
+		if err != nil {
+			p.log.Errorf("Transport request failed: unable to get list of Auth Servers: %v.", err)
+			req.Reply(false, []byte("connection rejected: failed to connect to auth server"))
+			return
+		}
+		if len(authServers) == 0 {
+			p.log.Errorf("Transport request failed: no auth servers found.")
+			req.Reply(false, []byte("connection rejected: failed to connect to auth server"))
+			return
+		}
+		for _, as := range authServers {
+			servers = append(servers, as.GetAddr())
+		}
+	case RemoteKubeProxy:
+		// If Kubernetes is not configured, reject the connection.
+		if p.kubeDialAddr.IsEmpty() {
+			req.Reply(false, []byte("connection rejected: configure kubernetes proxy for this cluster."))
+			return
+		}
+		servers = append(servers, p.kubeDialAddr.Addr)
+	// LocalNode requests are for the single server running in the agent pool.
+	case LocalNode:
+		req.Reply(true, []byte("Connected."))
+
+		// Hand connection off to the SSH server.
+		p.server.HandleConnection(utils.NewChConn(p.sconn, p.channel))
+		return
+	default:
+		servers = append(servers, server)
+	}
+
+	p.log.Debugf("Received out-of-band proxy transport request: %v", servers)
+
+	// Loop over all servers and try and connect to one of them.
+	var conn net.Conn
+	for _, s := range servers {
+		conn, err = net.Dial("tcp", s)
+		if err == nil {
+			break
+		}
+
+		// Log the reason the connection failed.
+		p.log.Debugf(trace.DebugReport(err))
+	}
+
+	// If all net.Dial attempts failed, write the last connection error to stderr
+	// of the caller (via SSH channel) so the error will be propagated all the
+	// way back to the client (tsh or ssh).
+	if err != nil {
+		fmt.Fprint(p.channel.Stderr(), err.Error())
+		req.Reply(false, []byte(err.Error()))
+		return
+	}
+
+	// Dail was successful.
+	req.Reply(true, []byte("Connected."))
+	p.log.Debugf("Successfully dialed to %v, start proxying.", server)
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		// Make sure that we close the client connection on a channel
+		// close, otherwise the other goroutine would never know
+		// as it will block on read from the connection.
+		defer conn.Close()
+		io.Copy(conn, p.channel)
+	}()
+
+	go func() {
+		defer wg.Done()
+		io.Copy(p.channel, conn)
+	}()
+
+	wg.Wait()
 }

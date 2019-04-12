@@ -19,10 +19,7 @@ package reversetunnel
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
-	//"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +85,9 @@ func (s *remoteSite) getRemoteClient() (auth.ClientI, bool, error) {
 		return nil, false, trace.Wrap(err)
 	}
 	keys := ca.GetTLSKeyPairs()
-	// the fact that cluster has keys to remote CA means that the key exchange has completed
+
+	// The fact that cluster has keys to remote CA means that the key exchange
+	// has completed.
 	if len(keys) != 0 {
 		s.Debugf("Using TLS client to remote cluster.")
 		pool, err := services.CertPool(ca)
@@ -109,14 +108,6 @@ func (s *remoteSite) getRemoteClient() (auth.ClientI, bool, error) {
 	}
 
 	return nil, false, trace.BadParameter("no TLS keys found")
-	//// create legacy client that will continue to perform certificate
-	//// exchange attempts
-	//s.Debugf("Created legacy SSH client to remote cluster.")
-	//clt, err := auth.NewClient("http://stub:0", s.dialAccessPoint)
-	//if err != nil {
-	//	return nil, false, trace.Wrap(err)
-	//}
-	//return clt, true, nil
 }
 
 func (s *remoteSite) authServerContextDialer(ctx context.Context, network, address string) (net.Conn, error) {
@@ -449,40 +440,8 @@ func (s *remoteSite) periodicUpdateCertAuthorities() {
 	}
 }
 
-//// dialAccessPoint establishes a connection from the proxy (reverse tunnel server)
-//// back into the client using previously established tunnel.
-//func (s *remoteSite) dialAccessPoint(network, addr string) (net.Conn, error) {
-//	try := func() (net.Conn, error) {
-//		rconn, err := s.nextConn()
-//		if err != nil {
-//			return nil, trace.Wrap(err)
-//		}
-//		channel, err := rconn.OpenChannel(chanAccessPoint, nil)
-//		if err != nil {
-//			rconn.markInvalid(err)
-//			s.Errorf("disconnecting cluster on %v, err: %v",
-//				rconn.conn.RemoteAddr(),
-//				err)
-//			return nil, trace.Wrap(err)
-//		}
-//		s.Debugf("success dialing to cluster")
-//		return rconn.ChannelConn(channel), nil
-//	}
-//
-//	for {
-//		conn, err := try()
-//		if err != nil {
-//			if trace.IsNotFound(err) {
-//				return nil, trace.Wrap(err)
-//			}
-//			continue
-//		}
-//		return conn, nil
-//	}
-//}
-
 func (s *remoteSite) DialAuthServer() (conn net.Conn, err error) {
-	return s.connThroughTunnel(chanTransportDialReq, RemoteAuthServer)
+	return s.connThroughTunnel(RemoteAuthServer)
 }
 
 // Dial is used to connect a requesting client (say, tsh) to an SSH server
@@ -513,7 +472,7 @@ func (s *remoteSite) Dial(params DialParams) (net.Conn, error) {
 func (s *remoteSite) DialTCP(from, to net.Addr) (net.Conn, error) {
 	s.Debugf("Dialing from %v to %v", from, to)
 
-	conn, err := s.connThroughTunnel(chanTransportDialReq, to.String())
+	conn, err := s.connThroughTunnel(to.String())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -536,7 +495,7 @@ func (s *remoteSite) dialWithAgent(params DialParams) (net.Conn, error) {
 		return nil, trace.Wrap(err)
 	}
 
-	targetConn, err := s.connThroughTunnel(chanTransportDialReq, params.To.String())
+	targetConn, err := s.connThroughTunnel(params.To.String())
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -575,20 +534,20 @@ func (s *remoteSite) dialWithAgent(params DialParams) (net.Conn, error) {
 	return conn, nil
 }
 
-func (s *remoteSite) connThroughTunnel(transportType string, data string) (conn net.Conn, err error) {
+func (s *remoteSite) connThroughTunnel(addr string) (conn net.Conn, err error) {
 	var stop bool
 
-	s.Debugf("Requesting %v connection to remote site with payload: %v", transportType, data)
+	s.Debugf("Requesting connection to remote site with payload: %v.", addr)
 
 	// loop through existing TCP/IP connections (reverse tunnels) and try
 	// to establish an inbound connection-over-ssh-channel to the remote
 	// cluster (AKA "remotetunnel agent"):
 	for i := 0; i < s.connectionCount() && !stop; i++ {
-		conn, stop, err = s.chanTransportConn(transportType, data)
+		conn, stop, err = s.chanTransportConn(addr)
 		if err == nil {
 			return conn, nil
 		}
-		s.Warnf("Request for %v connection to remote site failed: %v", transportType, err)
+		s.Warnf("Request for connection to remote site failed: %v.", err)
 	}
 	// didn't connect and no error? this means we didn't have any connected
 	// tunnels to try
@@ -598,37 +557,11 @@ func (s *remoteSite) connThroughTunnel(transportType string, data string) (conn 
 	return nil, err
 }
 
-func (s *remoteSite) chanTransportConn(transportType string, addr string) (net.Conn, bool, error) {
-	var stop bool
-
+func (s *remoteSite) chanTransportConn(addr string) (net.Conn, bool, error) {
 	rconn, err := s.nextConn()
 	if err != nil {
-		return nil, stop, trace.Wrap(err)
+		return nil, false, trace.Wrap(err)
 	}
-	channel, err := rconn.OpenChannel(chanTransport, nil)
-	if err != nil {
-		rconn.markInvalid(err)
-		return nil, stop, trace.Wrap(err)
-	}
-	// send a special SSH out-of-band request called "teleport-transport"
-	// the agent on the other side will create a new TCP/IP connection to
-	// 'addr' on its network and will start proxying that connection over
-	// this SSH channel:
-	var dialed bool
-	dialed, err = channel.SendRequest(transportType, true, []byte(addr))
-	if err != nil {
-		return nil, stop, trace.Wrap(err)
-	}
-	stop = true
-	if !dialed {
-		defer channel.Close()
-		// pull the error message from the tunnel client (remote cluster)
-		// passed to us via stderr:
-		errMessage, _ := ioutil.ReadAll(channel.Stderr())
-		if errMessage == nil {
-			errMessage = []byte("failed connecting to " + addr)
-		}
-		return nil, stop, trace.Errorf(strings.TrimSpace(string(errMessage)))
-	}
-	return rconn.ChannelConn(channel), stop, nil
+
+	return connectProxyTransport(rconn, addr)
 }

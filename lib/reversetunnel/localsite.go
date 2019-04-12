@@ -371,11 +371,10 @@ func (s *localSite) chanTransportConn(addr string) (net.Conn, error) {
 		return nil, trace.Wrap(err)
 	}
 
-	channel, err := rconn.OpenChannel(chanTransportNode, nil)
+	conn, _, err := connectProxyTransport(rconn, LocalNode)
 	if err != nil {
-		rconn.markInvalid(err)
 		return nil, trace.Wrap(err)
 	}
 
-	return rconn.ChannelConn(channel), nil
+	return conn, nil
 }

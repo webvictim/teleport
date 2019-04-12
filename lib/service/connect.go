@@ -31,6 +31,7 @@ import (
 	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/client"
 	"github.com/gravitational/teleport/lib/defaults"
+	"github.com/gravitational/teleport/lib/reversetunnel"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/tlsca"
 	"github.com/gravitational/teleport/lib/utils"
@@ -831,12 +832,12 @@ func (process *TeleportProcess) newClientThroughTunnel(servers []utils.NetAddr, 
 
 	// Connect to the Auth Server through the reverse tunnel server.
 	authDialer := func(in context.Context, network, addr string) (net.Conn, error) {
-		channel, _, err := conn.OpenChannel("auth", nil)
+		channel, _, err := conn.OpenChannel("teleport-transport", nil)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
 
-		ok, err := channel.SendRequest("teleport-transport", true, []byte("@local-auth-server"))
+		ok, err := channel.SendRequest("teleport-transport", true, []byte(reversetunnel.RemoteAuthServer))
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
