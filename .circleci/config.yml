@@ -9,6 +9,8 @@ jobs:
     environment:
       TEST_RESULTS: /tmp/test-results
     steps:
+      # remote docker
+      - setup_remote_docker
       # check out code
       - run:
           name: Check out code
@@ -32,12 +34,13 @@ jobs:
               curl -s https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
               dep ensure -v
             fi
-      # run tests
+      # run tests in container
       - run: 
-          name: Run tests
+          name: Run tests in container
           command: |
             mkdir -p ${TEST_RESULTS}
-            gotestsum --junitfile /tmp/test-results/results.xml
+            gotestsum --junitfile /tmp/test-results/test.xml -- make -C build.assets test
+            gotestsum --junitfile /tmp/test-results/integration.xml -- make -C build.assets integration
       # save module/dep cache after successful run
       - save_cache:
           key: go-cache-{{ checksum "Gopkg.lock" }}
