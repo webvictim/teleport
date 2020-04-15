@@ -5,7 +5,7 @@ jobs:
   build:
     docker:
       - image: circleci/golang:1.13.2
-    working_directory: /go/src/github.com/gravitational/teleport
+    working_directory: /gopath/src/github.com/gravitational/teleport
     environment:
       TEST_RESULTS: /tmp/test-results
     steps:
