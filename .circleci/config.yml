@@ -38,9 +38,8 @@ jobs:
       - run: 
           name: Run tests in container
           command: |
-            mkdir -p ${TEST_RESULTS}
-            gotestsum --junitfile /tmp/test-results/test.xml -- make -C build.assets test
-            gotestsum --junitfile /tmp/test-results/integration.xml -- make -C build.assets integration
+            make -C build.assets test
+            make -C build.assets integration
       # save module/dep cache after successful run
       - save_cache:
           key: go-cache-{{ checksum "Gopkg.lock" }}
@@ -48,10 +47,3 @@ jobs:
             - "/go/pkg/mod"
             - "/go/pkg/dep"
             - "/home/circleci/.cache/go-build"
-      # store raw test output
-      - store_artifacts:
-          path: /tmp/test-results
-          destination: raw-test-output
-      # store test result output
-      - store_test_results:
-          path: /tmp/test-results
