@@ -6,7 +6,7 @@ DOCSHOST=teleport-docs
 DOCSDIR=/teleport
 
 HOSTNAME=buildbox
-SRCDIR=/gopath/src/github.com/gravitational/teleport
+SRCDIR=/go/src/github.com/gravitational/teleport
 DOCKERFLAGS := --rm=true -v "$$(pwd)/../":$(SRCDIR) -v /tmp:/tmp -w $(SRCDIR) -h $(HOSTNAME)
 BCCFLAGS := -v "$$(pwd)/bcc:/usr/include/bcc"
 ADDFLAGS=-ldflags -w
